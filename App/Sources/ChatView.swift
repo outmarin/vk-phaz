@@ -75,12 +75,14 @@ struct ChatView: View {
                                     Color.accentColor.opacity(0.05)],
                            startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
-            VStack(spacing: 0) {
-                messageList
-                if let reply = replyingTo { replyBanner(reply) }
-                if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
-                inputBar
-            }
+            messageList
+                .safeAreaInset(edge: .bottom) {
+                    VStack(spacing: 0) {
+                        if let reply = replyingTo { replyBanner(reply) }
+                        if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
+                        inputBar
+                    }
+                }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
@@ -94,6 +96,8 @@ struct ChatView: View {
                                 .foregroundStyle(live.isTyping(peerId) ? Color.accentColor : Color.secondary)
                         }
                     }
+                    .padding(.horizontal, 16).padding(.vertical, 5)
+                    .glassEffect(in: Capsule())
                 }
                 .buttonStyle(.plain)
             }
@@ -114,9 +118,10 @@ struct ChatView: View {
         .sheet(isPresented: $showSearch) { MessageSearchSheet(vk: vk, peerId: peerId) }
         .sheet(isPresented: $showAttach) {
             AttachSheet(
-                onPhoto: { showAttach = false; showPhotoPicker = true },
+                onImageData: { data in showAttach = false; Task { await sendPhoto(data) } },
+                onGallery: { showAttach = false; showPhotoPicker = true },
                 onFile: { showAttach = false; showFileImporter = true })
-                .presentationDetents([.height(210)])
+                .presentationDetents([.medium, .large])
         }
         .sheet(isPresented: $showStickers) {
             StickerSheet(vk: vk) { sid in Task { await sendSticker(sid) } }
@@ -419,40 +424,6 @@ struct TypingDots: View {
         .padding(10)
         .background(.ultraThinMaterial, in: Capsule())
         .onAppear { on = true }
-    }
-}
-
-// MARK: - Attach sheet (glass tiles)
-
-struct AttachSheet: View {
-    let onPhoto: () -> Void
-    let onFile: () -> Void
-
-    var body: some View {
-        VStack(spacing: 14) {
-            Capsule().fill(.secondary.opacity(0.4)).frame(width: 36, height: 4).padding(.top, 8)
-            HStack(spacing: 16) {
-                tile("photo.on.rectangle.angled", "Галерея", action: onPhoto)
-                tile("doc.fill", "Файл", action: onFile)
-            }
-            .padding(.horizontal, 20)
-            Spacer()
-        }
-        .presentationDragIndicator(.hidden)
-    }
-
-    private func tile(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                Image(systemName: icon)
-                    .font(.system(size: 30))
-                    .foregroundStyle(Color.accentColor)
-                Text(label).font(.subheadline).foregroundStyle(.primary)
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 110)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
-        }
     }
 }
 
