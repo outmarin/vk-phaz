@@ -3,14 +3,7 @@ import SwiftUI
 struct SettingsView: View {
     let vk: VK
     @EnvironmentObject var store: AccountStore
-    @AppStorage("accentHex") private var accentHex = "#3A8DFF"
-    @AppStorage("appearance") private var appearance = 0
-    @AppStorage("notifsEnabled") private var notifs = true
-    @AppStorage("wallpaper") private var wallpaper = 0
-    @AppStorage("tg_target") private var tgTarget = ""
     @State private var showAdd = false
-    @State private var geminiKey = Keychain.get("gemini_key") ?? ""
-    @State private var tgToken = Keychain.get("tg_bot_token") ?? ""
 
     var body: some View {
         NavigationStack {
@@ -39,75 +32,14 @@ struct SettingsView: View {
                 Section {
                     NavigationLink {
                         ProfileView(vk: vk, userId: store.activeId ?? 0, ownId: store.activeId ?? 0)
-                    } label: {
-                        Label("Мой профиль", systemImage: "person.crop.circle")
-                    }
+                    } label: { Label("Мой профиль", systemImage: "person.crop.circle") }
                 }
 
-                Section("Оформление") {
-                    Picker("Тема", selection: $appearance) {
-                        Text("Система").tag(0)
-                        Text("Светлая").tag(1)
-                        Text("Тёмная").tag(2)
-                    }
-                    .pickerStyle(.segmented)
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text("Акцент").font(.subheadline)
-                        HStack(spacing: 14) {
-                            ForEach(accentPresets, id: \.hex) { preset in
-                                Circle().fill(Color(hex: preset.hex) ?? .blue)
-                                    .frame(width: 30, height: 30)
-                                    .overlay(Circle().stroke(Color.primary, lineWidth: accentHex == preset.hex ? 2 : 0).padding(-3))
-                                    .onTapGesture { accentHex = preset.hex }
-                            }
-                        }
-                    }
-                }
-
-                Section("Обои чата") {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(Wallpaper.presets) { p in
-                                VStack(spacing: 4) {
-                                    swatch(p)
-                                        .frame(width: 48, height: 72)
-                                        .clipShape(RoundedRectangle(cornerRadius: 10))
-                                        .overlay(RoundedRectangle(cornerRadius: 10)
-                                            .stroke(Color.accentColor, lineWidth: wallpaper == p.id ? 3 : 0))
-                                        .onTapGesture { wallpaper = p.id }
-                                    Text(p.name).font(.caption2).foregroundStyle(.secondary)
-                                }
-                            }
-                        }.padding(.vertical, 4)
-                    }
-                    Text("Отдельному чату можно поставить свою картинку в меню «•••» внутри чата.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-
-                Section("Уведомления") {
-                    Toggle("Локальные уведомления", isOn: $notifs)
-                }
-
-                Section {
-                    SecureField("Токен Telegram-бота", text: $tgToken)
-                        .autocorrectionDisabled().textInputAutocapitalization(.never)
-                        .onChange(of: tgToken) { _ in Keychain.set(tgToken, for: "tg_bot_token") }
-                    TextField("chat_id или @канал", text: $tgTarget)
-                        .autocorrectionDisabled().textInputAutocapitalization(.never)
-                } header: {
-                    Text("Уведомления в Telegram")
-                } footer: {
-                    Text("Создай бота у @BotFather, вставь токен и свой chat_id (узнать у @userinfobot; сначала напиши /start своему боту). Работает пока приложение открыто.")
-                }
-
-                Section {
-                    SecureField("Gemini API-ключ", text: $geminiKey)
-                        .autocorrectionDisabled().textInputAutocapitalization(.never)
-                        .onChange(of: geminiKey) { _ in Keychain.set(geminiKey, for: "gemini_key") }
-                } header: {
-                    Text("Нейросеть (Gemini)")
-                } footer: {
-                    Text("Ключ с aistudio.google.com. Кнопка ✨ в чате даёт ИИ, который читает всю переписку и отвечает на вопросы. Текст чата уходит в Google.")
+                Section("Настройки") {
+                    NavigationLink { AppearanceSettings() } label: { row("Оформление", "paintbrush.fill", .pink) }
+                    NavigationLink { WallpaperSettings() } label: { row("Обои чатов", "photo.fill", .teal) }
+                    NavigationLink { NotificationSettings() } label: { row("Уведомления", "bell.fill", .red) }
+                    NavigationLink { AISettings() } label: { row("Нейросеть", "sparkles", .purple) }
                 }
 
                 Section {
@@ -116,17 +48,112 @@ struct SettingsView: View {
                 }
             }
             .navigationTitle("Настройки")
-            .sheet(isPresented: $showAdd) {
-                LoginView { try await store.addAccount(token: $0) }
-            }
+            .sheet(isPresented: $showAdd) { LoginView { try await store.addAccount(token: $0) } }
         }
     }
 
-    @ViewBuilder private func swatch(_ p: WPPreset) -> some View {
-        if p.colors.isEmpty {
-            Color(.systemBackground)
-        } else {
-            LinearGradient(colors: p.colors, startPoint: .top, endPoint: .bottom)
+    private func row(_ title: String, _ icon: String, _ color: Color) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.footnote).foregroundStyle(.white)
+                .frame(width: 28, height: 28).background(color.gradient, in: RoundedRectangle(cornerRadius: 7))
+            Text(title)
         }
+    }
+}
+
+struct AppearanceSettings: View {
+    @AppStorage("accentHex") private var accentHex = "#3A8DFF"
+    @AppStorage("appearance") private var appearance = 0
+    var body: some View {
+        List {
+            Section("Тема") {
+                Picker("Тема", selection: $appearance) {
+                    Text("Система").tag(0); Text("Светлая").tag(1); Text("Тёмная").tag(2)
+                }.pickerStyle(.segmented)
+            }
+            Section("Акцент") {
+                HStack(spacing: 14) {
+                    ForEach(accentPresets, id: \.hex) { preset in
+                        Circle().fill(Color(hex: preset.hex) ?? .blue)
+                            .frame(width: 34, height: 34)
+                            .overlay(Circle().stroke(Color.primary, lineWidth: accentHex == preset.hex ? 2 : 0).padding(-3))
+                            .onTapGesture { accentHex = preset.hex }
+                    }
+                }.padding(.vertical, 4)
+            }
+        }
+        .navigationTitle("Оформление").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct WallpaperSettings: View {
+    @AppStorage("wallpaper") private var wallpaper = 0
+    var body: some View {
+        List {
+            Section {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 10), count: 3), spacing: 10) {
+                    ForEach(Wallpaper.presets) { p in
+                        VStack(spacing: 6) {
+                            swatch(p).frame(height: 120)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                                .overlay(RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.accentColor, lineWidth: wallpaper == p.id ? 3 : 0))
+                                .onTapGesture { wallpaper = p.id }
+                            Text(p.name).font(.caption2).foregroundStyle(.secondary)
+                        }
+                    }
+                }.padding(.vertical, 6)
+            } footer: {
+                Text("Отдельному чату можно поставить свою картинку в меню по тапу на имя внутри чата.")
+            }
+        }
+        .navigationTitle("Обои чатов").navigationBarTitleDisplayMode(.inline)
+    }
+    @ViewBuilder private func swatch(_ p: WPPreset) -> some View {
+        if p.colors.isEmpty { Color(.systemBackground) }
+        else { LinearGradient(colors: p.colors, startPoint: .top, endPoint: .bottom) }
+    }
+}
+
+struct NotificationSettings: View {
+    @AppStorage("notifsEnabled") private var notifs = true
+    @AppStorage("tg_target") private var tgTarget = ""
+    @State private var tgToken = Keychain.get("tg_bot_token") ?? ""
+    var body: some View {
+        List {
+            Section { Toggle("Локальные уведомления", isOn: $notifs) }
+            Section {
+                SecureField("Токен Telegram-бота", text: $tgToken)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .onChange(of: tgToken) { _ in Keychain.set(tgToken, for: "tg_bot_token") }
+                TextField("chat_id или @канал", text: $tgTarget)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+            } header: { Text("Уведомления в Telegram") }
+            footer: { Text("Создай бота у @BotFather, вставь токен и свой chat_id (у @userinfobot; сначала напиши /start боту). Работает пока приложение открыто. Для уведомлений при закрытом приложении — см. server/ в репозитории.") }
+        }
+        .navigationTitle("Уведомления").navigationBarTitleDisplayMode(.inline)
+    }
+}
+
+struct AISettings: View {
+    @State private var geminiKey = Keychain.get("gemini_key") ?? ""
+    var body: some View {
+        List {
+            Section {
+                Label(AIEngine.onDeviceReady ? "Локальная модель на устройстве доступна"
+                                              : "Локальная модель недоступна на этом устройстве",
+                      systemImage: AIEngine.onDeviceReady ? "checkmark.seal.fill" : "xmark.seal")
+                    .foregroundStyle(AIEngine.onDeviceReady ? .green : .secondary)
+            } footer: {
+                Text("ИИ читает переписку и отвечает на вопросы. Приоритет — локальная модель (без ключа и лимитов, приватно), иначе Gemini по ключу ниже.")
+            }
+            Section {
+                SecureField("Gemini API-ключ", text: $geminiKey)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .onChange(of: geminiKey) { _ in Keychain.set(geminiKey, for: "gemini_key") }
+            } header: { Text("Gemini (запасной вариант)") }
+            footer: { Text("Ключ с aistudio.google.com. Текст чата уходит в Google.") }
+        }
+        .navigationTitle("Нейросеть").navigationBarTitleDisplayMode(.inline)
     }
 }

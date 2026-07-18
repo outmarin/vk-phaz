@@ -53,35 +53,61 @@ struct LoginView: View {
     @State private var input = ""
     @State private var loading = false
     @State private var error: String?
+    @State private var showWeb = false
+    @State private var showManual = false
 
     var body: some View {
-        VStack(spacing: 18) {
+        VStack(spacing: 16) {
             Spacer()
             Image(systemName: "bubble.left.and.bubble.right.fill")
                 .font(.system(size: 56)).foregroundStyle(Color.accentColor)
             Text(title).font(.largeTitle.bold())
-            Text("Вставь access_token аккаунта VK")
+            Text("Войди через VK — токен подхватится сам")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center)
-            SecureField("access_token", text: $input)
-                .textFieldStyle(.roundedBorder)
-                .autocorrectionDisabled().textInputAutocapitalization(.never)
-                .padding(.horizontal)
-            if let error { Text(error).font(.footnote).foregroundStyle(.red) }
-            Button {
-                Task {
-                    loading = true; error = nil
-                    do { try await onSubmit(input); dismiss() }
-                    catch let e as VKError { error = e.error_msg }
-                    catch { self.error = error.localizedDescription }
-                    loading = false
-                }
-            } label: {
-                if loading { ProgressView() } else { Text("Войти").bold() }
+
+            if loading { ProgressView() }
+
+            Button { showWeb = true } label: {
+                Label("Войти через VK", systemImage: "person.badge.key.fill")
+                    .frame(maxWidth: .infinity).padding(.vertical, 6)
             }
             .buttonStyle(.borderedProminent)
-            .disabled(loading || input.trimmingCharacters(in: .whitespaces).isEmpty)
+            .padding(.horizontal)
+            .disabled(loading)
+
+            Button("Ввести токен вручную") { withAnimation { showManual.toggle() } }
+                .font(.footnote)
+
+            if showManual {
+                SecureField("access_token", text: $input)
+                    .textFieldStyle(.roundedBorder)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .padding(.horizontal)
+                Button("Войти") { submit(input) }
+                    .disabled(loading || input.trimmingCharacters(in: .whitespaces).isEmpty)
+            }
+
+            if let error { Text(error).font(.footnote).foregroundStyle(.red).padding(.horizontal) }
             Spacer()
         }
         .padding()
+        .sheet(isPresented: $showWeb) {
+            NavigationStack {
+                VKAuthWeb { token in showWeb = false; submit(token) }
+                    .ignoresSafeArea(edges: .bottom)
+                    .navigationTitle("Вход VK").navigationBarTitleDisplayMode(.inline)
+                    .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Отмена") { showWeb = false } } }
+            }
+        }
+    }
+
+    private func submit(_ token: String) {
+        Task {
+            loading = true; error = nil
+            do { try await onSubmit(token); dismiss() }
+            catch let e as VKError { error = e.error_msg }
+            catch { self.error = error.localizedDescription }
+            loading = false
+        }
     }
 }
