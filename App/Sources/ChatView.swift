@@ -37,6 +37,7 @@ struct ChatView: View {
     let title: String
     let ownId: Int
     @EnvironmentObject var live: LiveUpdates
+    @StateObject private var recorder = VoiceRecorder()
 
     @State private var messages: [ChatMessage] = []
     @State private var draft = ""
@@ -47,6 +48,7 @@ struct ChatView: View {
     @State private var peerProfile: Profile?
     @State private var showProfile = false
     @State private var showSearch = false
+    @State private var showAI = false
     @State private var showAttach = false
     @State private var showStickers = false
     @State private var showPhotoPicker = false
@@ -103,6 +105,9 @@ struct ChatView: View {
                 .buttonStyle(.plain)
             }
             ToolbarItem(placement: .topBarTrailing) {
+                Button { showAI = true } label: { Image(systemName: "sparkles") }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
                 Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -139,6 +144,7 @@ struct ChatView: View {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
         .sheet(isPresented: $showSearch) { MessageSearchSheet(vk: vk, peerId: peerId) }
+        .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
         .sheet(isPresented: $showAttach) {
             AttachSheet(
                 onImageData: { data in showAttach = false; Task { await addPhoto(data) } },
@@ -258,6 +264,15 @@ struct ChatView: View {
 
             if uploading {
                 ProgressView().frame(width: 40, height: 40)
+            } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty {
+                Image(systemName: recorder.recording ? "mic.fill" : "mic")
+                    .font(.title3)
+                    .foregroundStyle(recorder.recording ? .red : .secondary)
+                    .frame(width: 40, height: 40)
+                    .background(recorder.recording ? Color.red.opacity(0.15) : .clear, in: Circle())
+                    .onLongPressGesture(minimumDuration: 0.2, pressing: { pressing in
+                        if pressing { recorder.start() } else { Task { await finishVoice() } }
+                    }, perform: {})
             } else {
                 Button { Task { await send() } } label: {
                     Image(systemName: "arrow.up")
@@ -265,7 +280,6 @@ struct ChatView: View {
                         .frame(width: 40, height: 40)
                         .background(Color.accentColor, in: Circle())
                 }
-                .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty)
             }
         }
         .padding(.horizontal, 10).padding(.bottom, 6)
@@ -337,6 +351,19 @@ struct ChatView: View {
             let data = try Data(contentsOf: url)
             let att = try await vk.uploadDoc(peerId: peerId, data: data, name: url.lastPathComponent)
             pending.append(.init(attachment: att, thumb: nil, label: url.lastPathComponent))
+        } catch let e as VKError { error = e.error_msg }
+        catch { self.error = error.localizedDescription }
+    }
+
+    private func finishVoice() async {
+        guard let url = recorder.stop() else { return }
+        uploading = true
+        defer { uploading = false }
+        do {
+            let data = try Data(contentsOf: url)
+            guard data.count > 1000 else { return }   // ignore accidental taps
+            let att = try await vk.uploadVoice(peerId: peerId, data: data)
+            pending.append(.init(attachment: att, thumb: nil, label: "Голос"))
         } catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
     }

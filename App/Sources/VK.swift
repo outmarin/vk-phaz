@@ -86,6 +86,7 @@ struct Msg: Decodable, Identifiable {
 }
 
 struct HistoryResponse: Decodable {
+    let count: Int?
     let items: [Msg]
     let profiles: [Profile]?
     let groups: [VKGroup]?
@@ -226,6 +227,12 @@ struct VK {
             ["peer_id": String(peerId), "count": String(count), "offset": String(offset),
              "extended": "1", "fields": "photo_100"])
         return resolve(h.items.reversed(), h.profiles, h.groups)
+    }
+
+    func historyTotal(peerId: Int) async throws -> Int {
+        let h: HistoryResponse = try await call("messages.getHistory",
+            ["peer_id": String(peerId), "count": "1"])
+        return h.count ?? 0
     }
 
     func search(peerId: Int, query: String, before: Date? = nil) async throws -> [ChatMessage] {
