@@ -29,7 +29,6 @@ struct AvatarView: View {
 struct ChatListView: View {
     let vk: VK
     let ownId: Int
-    @Binding var tab: Int
     @EnvironmentObject var live: LiveUpdates
     @State private var rows: [ChatRow] = []
     @State private var query = ""
@@ -90,7 +89,6 @@ struct ChatListView: View {
             .refreshable { await load() }
             .task { await load() }
             .onChange(of: live.bump) { _ in Task { await load() } }
-            .safeAreaInset(edge: .bottom) { GlassTabBar(tab: $tab) }
         }
     }
 

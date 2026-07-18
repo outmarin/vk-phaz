@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     let vk: VK
-    @Binding var tab: Int
     @EnvironmentObject var store: AccountStore
     @AppStorage("accentHex") private var accentHex = "#3A8DFF"
     @AppStorage("appearance") private var appearance = 0
@@ -74,7 +73,6 @@ struct SettingsView: View {
             .sheet(isPresented: $showAdd) {
                 LoginView { try await store.addAccount(token: $0) }
             }
-            .safeAreaInset(edge: .bottom) { GlassTabBar(tab: $tab) }
         }
     }
 }

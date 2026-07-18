@@ -26,46 +26,22 @@ struct VKPhazApp: App {
 struct RootView: View {
     @EnvironmentObject var store: AccountStore
     @EnvironmentObject var live: LiveUpdates
-    @State private var tab = 0
 
     var body: some View {
         if let vk = store.vk, let acc = store.active {
-            Group {
-                if tab == 0 { ChatListView(vk: vk, ownId: acc.id, tab: $tab) }
-                else { SettingsView(vk: vk, tab: $tab) }
+            TabView {
+                Tab("Чаты", systemImage: "bubble.left.and.bubble.right.fill") {
+                    ChatListView(vk: vk, ownId: acc.id)
+                }
+                Tab("Настройки", systemImage: "gearshape.fill") {
+                    SettingsView(vk: vk)
+                }
             }
             .id(acc.id)
             .onAppear { live.requestAuth(); live.start(vk: vk) }
             .onDisappear { live.stop() }
         } else {
             LoginView(title: "TK") { try await store.addAccount(token: $0) }
-        }
-    }
-}
-
-struct GlassTabBar: View {
-    @Binding var tab: Int
-    var body: some View {
-        HStack(spacing: 4) {
-            item(0, "bubble.left.and.bubble.right.fill", "Чаты")
-            item(1, "gearshape.fill", "Настройки")
-        }
-        .padding(6)
-        .background(.ultraThinMaterial, in: Capsule())
-        .overlay(Capsule().stroke(.primary.opacity(0.08)))
-        .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
-        .padding(.bottom, 4)
-    }
-
-    private func item(_ i: Int, _ icon: String, _ label: String) -> some View {
-        Button { tab = i } label: {
-            HStack(spacing: 6) {
-                Image(systemName: icon)
-                Text(label).font(.subheadline.weight(.semibold))
-            }
-            .foregroundStyle(tab == i ? Color.accentColor : .secondary)
-            .padding(.horizontal, 18).padding(.vertical, 9)
-            .background(tab == i ? Color.accentColor.opacity(0.15) : .clear, in: Capsule())
         }
     }
 }

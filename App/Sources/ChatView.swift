@@ -83,6 +83,7 @@ struct ChatView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Button { if isUser && peerId != ownId { showProfile = true } } label: {
@@ -180,10 +181,13 @@ struct ChatView: View {
     }
 
     private var inputBar: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 10) {
             Button { showAttach = true } label: {
                 Image(systemName: "paperclip").font(.title3).foregroundStyle(.secondary)
+                    .frame(width: 42, height: 42)
             }
+            .glassEffect(in: Circle())
+
             HStack(spacing: 6) {
                 TextField("Сообщение", text: $draft, axis: .vertical)
                     .onChange(of: draft) { _ in sendTyping() }
@@ -191,23 +195,23 @@ struct ChatView: View {
                     Image(systemName: "face.smiling").font(.title3).foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .glassEffect(in: RoundedRectangle(cornerRadius: 22))
+
             if uploading {
-                ProgressView().frame(width: 34)
+                ProgressView().frame(width: 42, height: 42)
             } else {
                 Button { Task { await send() } } label: {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.bold))
                         .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 42, height: 42)
                         .background(Color.accentColor, in: Circle())
                 }
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
         .padding(.horizontal, 10).padding(.vertical, 8)
-        .background(.ultraThinMaterial)
     }
 
     private func replyBanner(_ reply: ChatMessage) -> some View {
