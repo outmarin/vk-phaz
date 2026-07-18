@@ -64,7 +64,7 @@ struct VK {
         let groups = Dictionary(uniqueKeysWithValues: (c.groups ?? []).map { ($0.id, $0) })
         return c.items.map { item in
             let peer = item.conversation.peer
-            resolveRow(peer: peer, settings: item.conversation.chat_settings,
+            return resolveRow(peer: peer, settings: item.conversation.chat_settings,
                        last: item.last_message, profiles: profiles, groups: groups)
         }
     }
