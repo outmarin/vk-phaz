@@ -1,22 +1,19 @@
 import Foundation
 import Security
 
-// ponytail: raw Security framework instead of a keychain wrapper dep — one account, one secret.
+// ponytail: raw Security framework, generic key/value string store. No wrapper dep.
 enum Keychain {
-    private static let key = "vk_access_token"
-
-    static func save(_ token: String) {
-        let data = Data(token.utf8)
+    static func set(_ value: String, for key: String) {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                 kSecAttrAccount as String: key]
         SecItemDelete(q as CFDictionary)
         var add = q
-        add[kSecValueData as String] = data
+        add[kSecValueData as String] = Data(value.utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         SecItemAdd(add as CFDictionary, nil)
     }
 
-    static func load() -> String? {
+    static func get(_ key: String) -> String? {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                 kSecAttrAccount as String: key,
                                 kSecReturnData as String: true,
@@ -27,7 +24,7 @@ enum Keychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func clear() {
+    static func delete(_ key: String) {
         let q: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
                                 kSecAttrAccount as String: key]
         SecItemDelete(q as CFDictionary)
