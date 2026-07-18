@@ -55,6 +55,7 @@ struct ChatView: View {
     @State private var matchIdx = 0
     @State private var highlightId: Int?
     @State private var searching = false
+    @State private var viewerURL: IdURL?
     @State private var showStickers = false
     @State private var showPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
@@ -98,7 +99,20 @@ struct ChatView: View {
         .toolbar(.hidden, for: .tabBar)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Button { if isUser && peerId != ownId { showProfile = true } } label: {
+                Menu {
+                    Button { withAnimation { searchMode = true } } label: {
+                        Label("Поиск в чате", systemImage: "magnifyingglass")
+                    }
+                    Button { showWallpaperPicker = true } label: { Label("Обои чата", systemImage: "photo") }
+                    if Wallpaper.hasImage(peer: peerId) {
+                        Button(role: .destructive) {
+                            Wallpaper.removeImage(peer: peerId); wpRefresh += 1
+                        } label: { Label("Сбросить обои", systemImage: "trash") }
+                    }
+                    if isUser && peerId != ownId {
+                        Button { showProfile = true } label: { Label("Профиль", systemImage: "person.crop.circle") }
+                    }
+                } label: {
                     VStack(spacing: 1) {
                         Text(title).font(.headline).foregroundStyle(.primary)
                         if !subtitle.isEmpty {
@@ -109,20 +123,11 @@ struct ChatView: View {
                     .padding(.horizontal, 16).padding(.vertical, 5)
                     .glassEffect(in: Capsule())
                 }
-                .buttonStyle(.plain)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { withAnimation { searchMode = true } } label: { Image(systemName: "magnifyingglass") }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
-                Menu {
-                    Button { showWallpaperPicker = true } label: { Label("Обои чата", systemImage: "photo") }
-                    if Wallpaper.hasImage(peer: peerId) {
-                        Button(role: .destructive) {
-                            Wallpaper.removeImage(peer: peerId); wpRefresh += 1
-                        } label: { Label("Сбросить обои", systemImage: "trash") }
-                    }
-                } label: { Image(systemName: "ellipsis.circle") }
+                Button { if isUser && peerId != ownId { showProfile = true } } label: {
+                    AvatarView(url: peerProfile?.avatar, name: title, id: peerId, size: 32)
+                }
             }
         }
         .onAppear { live.setActive(peer: peerId) }
@@ -151,6 +156,7 @@ struct ChatView: View {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
         .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
+        .fullScreenCover(item: $viewerURL) { PhotoViewer(url: $0.url) }
         .sheet(isPresented: $showAttach) {
             AttachSheet(
                 onImageData: { data in showAttach = false; Task { await addPhoto(data) } },
@@ -193,7 +199,8 @@ struct ChatView: View {
                         if let day = pair.day { dayChip(day) }
                         MessageRow(cm: pair.cm, mine: pair.cm.msg.from_id == ownId,
                                    isChat: isChat, readUpTo: outRead,
-                                   highlighted: highlightId == pair.cm.id)
+                                   highlighted: highlightId == pair.cm.id,
+                                   onOpenImage: { viewerURL = IdURL(url: $0) })
                             .id(pair.cm.id)
                             .onLongPressGesture { selected = pair.cm }
                     }
@@ -283,7 +290,7 @@ struct ChatView: View {
             .padding(.vertical, 6)
     }
 
-    // Bottom: floating glass controls over the wallpaper — no solid bar, blur only behind the controls.
+    // Bottom: floating glass controls over a soft progressive blur that fades up into the messages.
     private var bottomBar: some View {
         VStack(spacing: 6) {
             if let reply = replyingTo { replyBanner(reply) }
@@ -291,7 +298,13 @@ struct ChatView: View {
             if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
             inputBar
         }
-        .padding(.top, 6)
+        .padding(.top, 10)
+        .background(alignment: .bottom) {
+            Rectangle().fill(.ultraThinMaterial)
+                .mask(LinearGradient(colors: [.clear, .black.opacity(0.6), .black],
+                                     startPoint: .top, endPoint: .bottom))
+                .ignoresSafeArea()
+        }
     }
 
     private var attachmentTray: some View {
@@ -488,6 +501,7 @@ struct MessageRow: View {
     let isChat: Bool
     var readUpTo: Int = 0
     var highlighted: Bool = false
+    var onOpenImage: (URL) -> Void = { _ in }
     private var msg: Msg { cm.msg }
 
     private var bubbleShape: UnevenRoundedRectangle {
@@ -548,6 +562,7 @@ struct MessageRow: View {
                 CachedImage(url: photo)
                     .frame(width: 230, height: 230)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .onTapGesture { onOpenImage(photo) }
             }
             if let v = msg.voice { voiceRow(v) }
             if let d = msg.doc { docRow(d) }
@@ -556,10 +571,7 @@ struct MessageRow: View {
                 Text(hhmm(msg.date))
                     .font(.caption2)
                     .foregroundStyle(mine ? Color.white.opacity(0.75) : Color.secondary)
-                if mine {
-                    Text(msg.id <= readUpTo ? "✓✓" : "✓")
-                        .font(.caption2).foregroundStyle(Color.white.opacity(0.85))
-                }
+                if mine { ReadTicks(read: msg.id <= readUpTo) }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
@@ -603,6 +615,55 @@ struct MessageRow: View {
         if let u = d.url.flatMap({ URL(string: $0) }) {
             Link(destination: u) { row }.foregroundStyle(mine ? .white : .primary)
         } else { row }
+    }
+}
+
+struct ReadTicks: View {
+    let read: Bool
+    var body: some View {
+        ZStack(alignment: .leading) {
+            Image(systemName: "checkmark").font(.system(size: 8, weight: .bold))
+            if read {
+                Image(systemName: "checkmark").font(.system(size: 8, weight: .bold)).offset(x: 4)
+            }
+        }
+        .foregroundStyle(.white.opacity(0.9))
+        .frame(width: read ? 15 : 11, alignment: .leading)
+    }
+}
+
+struct IdURL: Identifiable { let id = UUID(); let url: URL }
+
+struct PhotoViewer: View {
+    let url: URL
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1
+    @State private var offset: CGSize = .zero
+
+    var body: some View {
+        ZStack {
+            Color.black.ignoresSafeArea()
+            CachedImage(url: url, fill: false, placeholder: .clear)
+                .scaleEffect(scale)
+                .offset(offset)
+                .gesture(MagnificationGesture()
+                    .onChanged { scale = max(1, $0) }
+                    .onEnded { _ in if scale < 1 { withAnimation { scale = 1 } } })
+                .simultaneousGesture(DragGesture()
+                    .onChanged { offset = $0.translation }
+                    .onEnded { _ in if scale <= 1 { withAnimation { offset = .zero } } })
+                .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2.5 } }
+            VStack {
+                HStack {
+                    Spacer()
+                    Button { dismiss() } label: {
+                        Image(systemName: "xmark.circle.fill").font(.title).foregroundStyle(.white)
+                    }
+                }
+                Spacer()
+            }
+            .padding()
+        }
     }
 }
 

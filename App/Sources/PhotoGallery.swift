@@ -104,22 +104,25 @@ struct AttachSheet: View {
     }
 
     private var optionsRow: some View {
-        HStack(spacing: 12) {
-            option("photo.stack", "Галерея", .blue, onGallery)
-            option("doc.fill", "Файл", .indigo, onFile)
+        VStack(spacing: 8) {
+            option("photo.on.rectangle.angled", "Открыть галерею", .blue, onGallery)
+            option("folder.fill", "Файл", .indigo, onFile)
         }
-        .padding(14)
-        .background(.ultraThinMaterial)
+        .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 4)
+        .background(.regularMaterial)
     }
 
     private func option(_ icon: String, _ label: String, _ color: Color, _ action: @escaping () -> Void) -> some View {
         Button { action() } label: {
-            VStack(spacing: 6) {
-                Image(systemName: icon).font(.title2).foregroundStyle(.white)
-                    .frame(width: 56, height: 56)
-                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 16))
-                Text(label).font(.caption).foregroundStyle(.primary)
+            HStack(spacing: 12) {
+                Image(systemName: icon).font(.title3).foregroundStyle(.white)
+                    .frame(width: 38, height: 38)
+                    .background(color.gradient, in: RoundedRectangle(cornerRadius: 10))
+                Text(label).font(.body).foregroundStyle(.primary)
+                Spacer()
             }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
         }
     }
 }
