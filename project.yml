@@ -22,5 +22,6 @@ targets:
         CFBundleDisplayName: TK
         UILaunchScreen: {}
         NSPhotoLibraryUsageDescription: Для отправки фотографий в чат.
+        NSMicrophoneUsageDescription: Для записи голосовых сообщений.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false

@@ -4,6 +4,7 @@ import Foundation
 
 struct VKError: Decodable, Error { let error_code: Int; let error_msg: String }
 struct VKResponse<T: Decodable>: Decodable { let response: T?; let error: VKError? }
+struct VKIgnored: Decodable {}  // for responses whose body we don't need
 
 struct Profile: Decodable, Identifiable {
     let id: Int
@@ -37,9 +38,11 @@ struct Attachment: Decodable {
     let sticker: Sticker?
     let photo: Photo?
     let doc: Doc?
+    let audio_message: AudioMessage?
     struct Sticker: Decodable { let images: [AttachmentImage] }
     struct Photo: Decodable { let sizes: [AttachmentImage] }
     struct Doc: Decodable { let title: String?; let url: String?; let ext: String?; let size: Int? }
+    struct AudioMessage: Decodable { let duration: Int?; let link_mp3: String?; let link_ogg: String? }
 }
 
 struct Msg: Decodable, Identifiable {
@@ -66,12 +69,16 @@ struct Msg: Decodable, Identifiable {
         return URL(string: img.url)
     }
     var doc: Attachment.Doc? { (attachments ?? []).first(where: { $0.type == "doc" })?.doc }
+    var voice: Attachment.AudioMessage? {
+        (attachments ?? []).first(where: { $0.type == "audio_message" })?.audio_message
+    }
 
     // A human preview for the chat list when text is empty.
     var preview: String {
         if !text.isEmpty { return text }
         if stickerURL != nil { return "🩷 Стикер" }
         if photoURL != nil { return "🖼 Фото" }
+        if voice != nil { return "🎤 Голосовое" }
         if let d = doc { return "📎 " + (d.title ?? "Файл") }
         if fwd_messages?.isEmpty == false { return "↪️ Пересланное" }
         return ""
@@ -115,7 +122,12 @@ struct StickerItem: Decodable, Identifiable {
 }
 struct StoreProducts: Decodable {
     let items: [Product]
-    struct Product: Decodable { let stickers: [StickerItem]? }
+    struct Product: Decodable { let id: Int?; let title: String?; let stickers: [StickerItem]? }
+}
+struct StickerPack: Identifiable {
+    let id: Int
+    let title: String
+    let stickers: [StickerItem]
 }
 
 // A resolved chat-list row.
@@ -208,6 +220,14 @@ struct VK {
         return resolve(h.items.reversed(), h.profiles, h.groups)
     }
 
+    // For AI summarization: a page of history, oldest-first, at an offset from the newest.
+    func historyPage(peerId: Int, offset: Int, count: Int = 200) async throws -> [ChatMessage] {
+        let h: HistoryResponse = try await call("messages.getHistory",
+            ["peer_id": String(peerId), "count": String(count), "offset": String(offset),
+             "extended": "1", "fields": "photo_100"])
+        return resolve(h.items.reversed(), h.profiles, h.groups)
+    }
+
     func search(peerId: Int, query: String, before: Date? = nil) async throws -> [ChatMessage] {
         var p = ["peer_id": String(peerId), "q": query, "count": "100",
                  "extended": "1", "fields": "photo_100"]
@@ -249,10 +269,36 @@ struct VK {
             ["peer_id": String(peerId), "cmid": String(cmid), "reaction_id": String(reactionId)])
     }
 
+    func deleteMessages(ids: [Int], forAll: Bool) async throws {
+        var p = ["message_ids": ids.map(String.init).joined(separator: ",")]
+        if forAll { p["delete_for_all"] = "1" }
+        let _: [String: Int]? = try? await call("messages.delete", p)  // returns {id:1} map
+    }
+
+    func forward(peerId: Int, messageIds: [Int]) async throws {
+        let _: Int = try await call("messages.send",
+            ["peer_id": String(peerId),
+             "forward_messages": messageIds.map(String.init).joined(separator: ","),
+             "random_id": String(Int32.random(in: 1...Int32.max))])
+    }
+
+    func pinMessage(peerId: Int, cmid: Int) async throws {
+        let _: VKIgnored = try await call("messages.pin",
+            ["peer_id": String(peerId), "conversation_message_id": String(cmid)])
+    }
+
     func stickers() async throws -> [StickerItem] {
+        try await stickerPacks().flatMap { $0.stickers }
+    }
+
+    func stickerPacks() async throws -> [StickerPack] {
         let r: StoreProducts = try await call("store.getProducts",
-            ["type": "stickers", "filters": "purchased", "extended": "1"])
-        return r.items.flatMap { $0.stickers ?? [] }
+            ["type": "stickers", "filters": "purchased,active", "extended": "1"])
+        return r.items.enumerated().compactMap { i, prod in
+            let items = prod.stickers ?? []
+            guard !items.isEmpty else { return nil }
+            return StickerPack(id: prod.id ?? i, title: prod.title ?? "Стикеры", stickers: items)
+        }
     }
 
     func setActivity(peerId: Int) async {
@@ -292,15 +338,34 @@ struct VK {
     }
 
     func uploadDoc(peerId: Int, data: Data, name: String) async throws -> String {
+        try await uploadDocTyped(peerId: peerId, data: data, name: name, type: "doc",
+                                 field: "file", mime: "application/octet-stream")
+    }
+
+    // VK voice message: upload as an audio_message doc (m4a). May render as a file if VK rejects the codec.
+    func uploadVoice(peerId: Int, data: Data) async throws -> String {
+        try await uploadDocTyped(peerId: peerId, data: data, name: "voice.m4a",
+                                 type: "audio_message", field: "file", mime: "audio/m4a")
+    }
+
+    private func uploadDocTyped(peerId: Int, data: Data, name: String, type: String,
+                                field: String, mime: String) async throws -> String {
         struct Up: Decodable { let upload_url: String }
         let up: Up = try await call("docs.getMessagesUploadServer",
-            ["peer_id": String(peerId), "type": "doc"])
+            ["peer_id": String(peerId), "type": type])
         struct Uploaded: Decodable { let file: String }
-        let u: Uploaded = try await multipart(up.upload_url, field: "file",
-                                              filename: name, mime: "application/octet-stream", data: data)
-        struct SaveResp: Decodable { let doc: D; struct D: Decodable { let owner_id: Int; let id: Int } }
+        let u: Uploaded = try await multipart(up.upload_url, field: field,
+                                              filename: name, mime: mime, data: data)
+        struct SaveResp: Decodable {
+            let type: String?
+            let doc: D?
+            let audio_message: D?
+            struct D: Decodable { let owner_id: Int; let id: Int }
+        }
         let saved: SaveResp = try await call("docs.save", ["file": u.file])
-        return "doc\(saved.doc.owner_id)_\(saved.doc.id)"
+        if let am = saved.audio_message { return "doc\(am.owner_id)_\(am.id)" }
+        if let d = saved.doc { return "doc\(d.owner_id)_\(d.id)" }
+        throw VKError(error_code: -1, error_msg: "upload failed")
     }
 
     private func multipart<T: Decodable>(_ urlString: String, field: String, filename: String,

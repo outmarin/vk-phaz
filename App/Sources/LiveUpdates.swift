@@ -63,6 +63,8 @@ final class LiveUpdates: ObservableObject {
             bump += 1
             let outgoing = flags & 2 != 0
             if !outgoing && peer != currentPeer { notify(text.isEmpty ? "Вложение" : text) }
+        case 2, 5, 13:  // message deleted / edited / flags changed → reload so it reflects
+            bump += 1
         case 61:  // typing in a dialog: [61, user_id, ...]
             if let peer = u[safe: 1] as? Int { typing[peer] = Date().addingTimeInterval(6) }
         case 63, 64:  // typing in a chat: [.., ..., peer_id]
@@ -73,6 +75,7 @@ final class LiveUpdates: ObservableObject {
     }
 
     private func notify(_ body: String) {
+        TelegramNotifier.send(body)  // forwards to TG bot if configured
         guard UserDefaults.standard.object(forKey: "notifsEnabled") as? Bool ?? true else { return }
         let c = UNMutableNotificationContent()
         c.title = "Новое сообщение"
