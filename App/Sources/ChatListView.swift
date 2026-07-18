@@ -10,7 +10,7 @@ struct AvatarView: View {
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: {
-                Circle().fill(tint(for: id).gradient)
+                Circle().fill(avatarTint(for: id).gradient)
                     .overlay(Text(initials(name))
                         .font(.system(size: size * 0.38, weight: .semibold))
                         .foregroundStyle(.white))

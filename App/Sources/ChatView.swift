@@ -203,7 +203,7 @@ struct MessageRow: View {
             }
             VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
                 if isChat && !mine {
-                    Text(cm.senderName).font(.caption).foregroundStyle(tint(for: msg.from_id))
+                    Text(cm.senderName).font(.caption).foregroundStyle(avatarTint(for: msg.from_id))
                 }
                 content
             }

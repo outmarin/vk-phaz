@@ -5,7 +5,7 @@ import Foundation
 struct VKError: Decodable, Error { let error_code: Int; let error_msg: String }
 struct VKResponse<T: Decodable>: Decodable { let response: T?; let error: VKError? }
 
-struct Profile: Decodable {
+struct Profile: Decodable, Identifiable {
     let id: Int
     let first_name: String
     let last_name: String
@@ -53,14 +53,14 @@ struct Msg: Decodable, Identifiable {
     struct Reply: Decodable { let from_id: Int; let text: String }
 
     var stickerURL: URL? {
-        attachments?.first(where: { $0.type == "sticker" })?.sticker?
-            .images.max(by: { $0.width < $1.width })?.url.flatMap(URL.init(string:))
+        (attachments ?? []).first(where: { $0.type == "sticker" })?.sticker?
+            .images.max(by: { $0.width < $1.width })?.url.flatMap { URL(string: $0) }
     }
     var photoURL: URL? {
-        attachments?.first(where: { $0.type == "photo" })?.photo?
-            .sizes.max(by: { $0.width < $1.width })?.url.flatMap(URL.init(string:))
+        (attachments ?? []).first(where: { $0.type == "photo" })?.photo?
+            .sizes.max(by: { $0.width < $1.width })?.url.flatMap { URL(string: $0) }
     }
-    var doc: Attachment.Doc? { attachments?.first(where: { $0.type == "doc" })?.doc }
+    var doc: Attachment.Doc? { (attachments ?? []).first(where: { $0.type == "doc" })?.doc }
 
     // A human preview for the chat list when text is empty.
     var preview: String {

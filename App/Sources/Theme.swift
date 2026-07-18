@@ -33,7 +33,7 @@ enum Pins {
 }
 
 // Deterministic avatar tint for placeholder circles.
-func tint(for id: Int) -> Color {
+func avatarTint(for id: Int) -> Color {
     let palette: [Color] = [.blue, .purple, .pink, .orange, .green, .teal, .indigo, .red]
     return palette[abs(id) % palette.count]
 }
