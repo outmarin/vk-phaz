@@ -54,6 +54,9 @@ struct ChatView: View {
     @State private var showFileImporter = false
     @State private var uploading = false
     @State private var lastTyping = Date.distantPast
+    @State private var wpRefresh = 0
+    @State private var showWallpaperPicker = false
+    @State private var wallpaperItem: PhotosPickerItem?
 
     private var isChat: Bool { peerId >= 2_000_000_000 }
     private var isUser: Bool { peerId > 0 && peerId < 2_000_000_000 }
@@ -78,11 +81,7 @@ struct ChatView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color.accentColor.opacity(0.16),
-                                    Color.purple.opacity(0.10),
-                                    Color.accentColor.opacity(0.05)],
-                           startPoint: .top, endPoint: .bottom)
-                .ignoresSafeArea()
+            WallpaperBackground(peerId: peerId, refresh: wpRefresh)
             messageList
                 .safeAreaInset(edge: .bottom) { bottomBar }
         }
@@ -105,6 +104,16 @@ struct ChatView: View {
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
+            }
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    Button { showWallpaperPicker = true } label: { Label("Обои чата", systemImage: "photo") }
+                    if Wallpaper.hasImage(peer: peerId) {
+                        Button(role: .destructive) {
+                            Wallpaper.removeImage(peer: peerId); wpRefresh += 1
+                        } label: { Label("Сбросить обои", systemImage: "trash") }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
             }
         }
         .onAppear { live.setActive(peer: peerId) }
@@ -147,6 +156,16 @@ struct ChatView: View {
             Task {
                 if let data = try? await item.loadTransferable(type: Data.self) { await addPhoto(data) }
                 photoItem = nil
+            }
+        }
+        .photosPicker(isPresented: $showWallpaperPicker, selection: $wallpaperItem, matching: .images)
+        .onChange(of: wallpaperItem) { item in
+            guard let item else { return }
+            Task {
+                if let data = try? await item.loadTransferable(type: Data.self) {
+                    Wallpaper.setImage(peer: peerId, data: data); wpRefresh += 1
+                }
+                wallpaperItem = nil
             }
         }
         .fileImporter(isPresented: $showFileImporter, allowedContentTypes: [.item]) { result in

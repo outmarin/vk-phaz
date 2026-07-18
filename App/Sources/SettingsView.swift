@@ -6,7 +6,11 @@ struct SettingsView: View {
     @AppStorage("accentHex") private var accentHex = "#3A8DFF"
     @AppStorage("appearance") private var appearance = 0
     @AppStorage("notifsEnabled") private var notifs = true
+    @AppStorage("wallpaper") private var wallpaper = 0
+    @AppStorage("tg_target") private var tgTarget = ""
     @State private var showAdd = false
+    @State private var geminiKey = Keychain.get("gemini_key") ?? ""
+    @State private var tgToken = Keychain.get("tg_bot_token") ?? ""
 
     var body: some View {
         NavigationStack {
@@ -60,8 +64,50 @@ struct SettingsView: View {
                     }
                 }
 
+                Section("Обои чата") {
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(Wallpaper.presets) { p in
+                                VStack(spacing: 4) {
+                                    swatch(p)
+                                        .frame(width: 48, height: 72)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                        .overlay(RoundedRectangle(cornerRadius: 10)
+                                            .stroke(Color.accentColor, lineWidth: wallpaper == p.id ? 3 : 0))
+                                        .onTapGesture { wallpaper = p.id }
+                                    Text(p.name).font(.caption2).foregroundStyle(.secondary)
+                                }
+                            }
+                        }.padding(.vertical, 4)
+                    }
+                    Text("Отдельному чату можно поставить свою картинку в меню «•••» внутри чата.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+
                 Section("Уведомления") {
-                    Toggle("Уведомления о сообщениях", isOn: $notifs)
+                    Toggle("Локальные уведомления", isOn: $notifs)
+                }
+
+                Section {
+                    SecureField("Токен Telegram-бота", text: $tgToken)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .onChange(of: tgToken) { _ in Keychain.set(tgToken, for: "tg_bot_token") }
+                    TextField("chat_id или @канал", text: $tgTarget)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                } header: {
+                    Text("Уведомления в Telegram")
+                } footer: {
+                    Text("Создай бота у @BotFather, вставь токен и свой chat_id (узнать у @userinfobot; сначала напиши /start своему боту). Работает пока приложение открыто.")
+                }
+
+                Section {
+                    SecureField("Gemini API-ключ", text: $geminiKey)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .onChange(of: geminiKey) { _ in Keychain.set(geminiKey, for: "gemini_key") }
+                } header: {
+                    Text("Нейросеть (Gemini)")
+                } footer: {
+                    Text("Ключ с aistudio.google.com. Кнопка ✨ в чате даёт ИИ, который читает всю переписку и отвечает на вопросы. Текст чата уходит в Google.")
                 }
 
                 Section {
@@ -73,6 +119,14 @@ struct SettingsView: View {
             .sheet(isPresented: $showAdd) {
                 LoginView { try await store.addAccount(token: $0) }
             }
+        }
+    }
+
+    @ViewBuilder private func swatch(_ p: WPPreset) -> some View {
+        if p.colors.isEmpty {
+            Color(.systemBackground)
+        } else {
+            LinearGradient(colors: p.colors, startPoint: .top, endPoint: .bottom)
         }
     }
 }
