@@ -55,6 +55,8 @@ struct ChatView: View {
     @State private var matchIdx = 0
     @State private var highlightId: Int?
     @State private var searching = false
+    @State private var searchError = ""
+    @FocusState private var searchFocused: Bool
     @State private var viewerURL: IdURL?
     @State private var showStickers = false
     @State private var showPhotoPicker = false
@@ -227,24 +229,30 @@ struct ChatView: View {
             Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
             TextField("Поиск в чате", text: $searchText)
                 .autocorrectionDisabled()
+                .submitLabel(.search)
+                .focused($searchFocused)
                 .onSubmit { Task { await runSearch() } }
             if searching { ProgressView() }
+            Button { Task { await runSearch() } } label: { Text("Найти") }
+                .disabled(searchText.trimmingCharacters(in: .whitespaces).isEmpty)
             Button { showAI = true } label: { Image(systemName: "sparkles") }
             Button("Отмена") { closeSearch() }
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .background(.ultraThinMaterial)
+        .onAppear { searchFocused = true }
     }
 
     private var searchNavBar: some View {
         HStack {
-            Text(matchIds.isEmpty ? "Нет совпадений" : "\(matchIdx + 1)/\(matchIds.count)")
+            Text(!searchError.isEmpty ? searchError
+                 : matchIds.isEmpty ? "Введи фразу и «Найти»" : "\(matchIdx + 1)/\(matchIds.count)")
                 .font(.subheadline).foregroundStyle(.secondary)
             Spacer()
             Button { step(-1) } label: { Image(systemName: "chevron.up") }
-                .disabled(matchIdx <= 0)
+                .disabled(matchIdx <= 0 || matchIds.isEmpty)
             Button { step(1) } label: { Image(systemName: "chevron.down") }
-                .disabled(matchIdx >= matchIds.count - 1)
+                .disabled(matchIdx >= matchIds.count - 1 || matchIds.isEmpty)
         }
         .font(.title3)
         .padding(.horizontal, 20).padding(.vertical, 12)
@@ -254,10 +262,14 @@ struct ChatView: View {
     private func runSearch() async {
         let q = searchText.trimmingCharacters(in: .whitespaces)
         guard !q.isEmpty else { return }
-        searching = true
-        matchIds = (try? await vk.searchIds(peerId: peerId, query: q)) ?? []
+        searching = true; searchError = ""; searchFocused = false
+        do {
+            matchIds = try await vk.searchIds(peerId: peerId, query: q)
+            if matchIds.isEmpty { searchError = "Ничего не найдено" }
+            else { matchIdx = matchIds.count - 1; await goto() }
+        } catch let e as VKError { searchError = e.error_msg; matchIds = [] }
+        catch { searchError = error.localizedDescription; matchIds = [] }
         searching = false
-        if !matchIds.isEmpty { matchIdx = matchIds.count - 1; await goto() }  // start at newest match
     }
 
     private func step(_ d: Int) {
@@ -352,14 +364,15 @@ struct ChatView: View {
             if uploading {
                 ProgressView().frame(width: 42, height: 42)
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty {
-                Image(systemName: recorder.recording ? "mic.fill" : "mic")
-                    .font(.title3)
-                    .foregroundStyle(recorder.recording ? .red : .secondary)
-                    .frame(width: 42, height: 42)
-                    .glassEffect(in: Circle())
-                    .onLongPressGesture(minimumDuration: 0.2, pressing: { pressing in
-                        if pressing { recorder.start() } else { Task { await finishVoice() } }
-                    }, perform: {})
+                Button {
+                    if recorder.recording { Task { await finishVoice() } } else { recorder.start() }
+                } label: {
+                    Image(systemName: recorder.recording ? "stop.circle.fill" : "mic")
+                        .font(.title3)
+                        .foregroundStyle(recorder.recording ? .red : .secondary)
+                        .frame(width: 42, height: 42)
+                        .glassEffect(in: Circle())
+                }
             } else {
                 Button { Task { await send() } } label: {
                     Image(systemName: "arrow.up")
@@ -526,7 +539,8 @@ struct MessageRow: View {
             if !mine { Spacer(minLength: 48) }
         }
         .padding(.horizontal, 10)
-        .background(highlighted ? Color.yellow.opacity(0.25) : .clear)
+        .background(highlighted ? Color.yellow.opacity(0.4) : .clear)
+        .animation(.easeInOut, value: highlighted)
     }
 
     @ViewBuilder private var content: some View {

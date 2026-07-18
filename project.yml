@@ -31,3 +31,7 @@ targets:
         NSMicrophoneUsageDescription: Для записи голосовых сообщений.
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
+          NSExceptionDomains:
+            "178.105.123.75":
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: false

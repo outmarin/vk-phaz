@@ -116,63 +116,151 @@ struct WallpaperSettings: View {
 }
 
 struct NotificationSettings: View {
+    @EnvironmentObject var store: AccountStore
     @AppStorage("notifsEnabled") private var notifs = true
     @AppStorage("tg_target") private var tgTarget = ""
+    @AppStorage("notifyServer") private var server = "http://178.105.123.75:8787"
+    @AppStorage("serverNotifyEnabled") private var serverOn = false
     @State private var tgToken = Keychain.get("tg_bot_token") ?? ""
+    @State private var showConsent = false
+    @State private var status = ""
+
+    private var canServer: Bool {
+        !tgToken.isEmpty && !tgTarget.isEmpty && store.active != nil
+    }
+
     var body: some View {
         List {
             Section { Toggle("Локальные уведомления", isOn: $notifs) }
+                footer: { Text("Приходят пока приложение открыто.") }
+
             Section {
                 SecureField("Токен Telegram-бота", text: $tgToken)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                     .onChange(of: tgToken) { _ in Keychain.set(tgToken, for: "tg_bot_token") }
                 TextField("chat_id или @канал", text: $tgTarget)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
-            } header: { Text("Уведомления в Telegram") }
-            footer: { Text("Создай бота у @BotFather, вставь токен и свой chat_id (у @userinfobot; сначала напиши /start боту). Работает пока приложение открыто. Для уведомлений при закрытом приложении — см. server/ в репозитории.") }
+            } header: { Text("Telegram-бот") }
+            footer: { Text("Создай бота у @BotFather, вставь токен и свой chat_id (у @userinfobot; сначала напиши /start боту).") }
+
+            Section {
+                TextField("Адрес сервера", text: $server)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                if serverOn {
+                    Label("Включено — сервер мониторит под вашим аккаунтом", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.footnote)
+                    Button(role: .destructive) { Task { await disable() } } label: { Text("Выключить на сервере") }
+                } else {
+                    Button { showConsent = true } label: { Label("Включить уведомления при закрытом приложении", systemImage: "server.rack") }
+                        .disabled(!canServer)
+                }
+                if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
+            } header: { Text("Сервер (при закрытом приложении)") }
+            footer: { Text("Сервер держит подключение к VK вместо телефона и шлёт входящие в ваш Telegram. Токен передаётся на сервер и хранится там в зашифрованном виде. Заполни бота и chat_id выше.") }
         }
         .navigationTitle("Уведомления").navigationBarTitleDisplayMode(.inline)
+        .alert("Разрешить мониторинг?", isPresented: $showConsent) {
+            Button("Отмена", role: .cancel) {}
+            Button("Разрешить") { Task { await enable() } }
+        } message: {
+            Text("Сервер будет под вашим аккаунтом VK читать входящие сообщения и пересылать их в ваш Telegram — чтобы уведомления приходили при закрытом приложении. Ваш VK-токен будет храниться на сервере в зашифрованном виде. Согласны?")
+        }
+    }
+
+    private func enable() async {
+        guard let token = store.active?.token else { return }
+        status = "Подключаю к серверу…"
+        do {
+            try await NotifierServer.register(vkToken: token, tgBot: tgToken, tgChat: tgTarget)
+            serverOn = true; status = "Готово"
+        } catch let e as VKError { status = e.error_msg }
+        catch { status = error.localizedDescription }
+    }
+
+    private func disable() async {
+        guard let token = store.active?.token else { return }
+        status = "Отключаю…"
+        do { try await NotifierServer.unregister(vkToken: token); serverOn = false; status = "Выключено" }
+        catch { status = "Ошибка отключения" }
     }
 }
 
 struct AISettings: View {
     @StateObject private var local = LocalLLM.shared
+    @AppStorage("aiProvider") private var providerRaw = ""
+    @AppStorage("openrouter_model") private var orModel = "openai/gpt-4o-mini"
     @State private var geminiKey = Keychain.get("gemini_key") ?? ""
+    @State private var orKey = Keychain.get("openrouter_key") ?? ""
 
     var body: some View {
         List {
             Section {
-                if local.isDownloaded {
-                    Label("Локальная модель загружена", systemImage: "checkmark.seal.fill")
-                        .foregroundStyle(.green)
-                    Button(role: .destructive) { local.delete() } label: { Text("Удалить модель") }
-                } else if local.downloading {
-                    VStack(alignment: .leading, spacing: 6) {
-                        ProgressView(value: local.progress)
-                        Text(local.status).font(.caption).foregroundStyle(.secondary)
-                    }
-                } else {
-                    Button { local.startDownload() } label: {
-                        Label("Скачать локальную модель (~400 МБ)", systemImage: "arrow.down.circle.fill")
-                    }
+                Picker("Провайдер", selection: $providerRaw) {
+                    Text("Авто (\(AIEngine.autoDefault.title))").tag("")
+                    ForEach(AIProvider.allCases) { Text($0.title).tag($0.rawValue) }
                 }
-            } header: { Text("Локальная модель") }
-            footer: {
-                Text("Работает на любом телефоне без интернета и лимитов, данные не уходят. Модель Qwen2.5-0.5B. Маленькая и медленная — свод большого чата собирается долго.")
-            }
+            } header: { Text("Что использовать") }
+            footer: { Text("«Авто» само берёт лучшее из доступного: локальная → Apple → Gemini → OpenRouter.") }
+
+            Section {
+                ForEach(LocalLLM.catalog) { m in modelRow(m) }
+            } header: { Text("Локальные модели (на любом телефоне)") }
+            footer: { Text("Работают без интернета, ключей и лимитов, данные не уходят. Больше параметров — умнее, но тяжелее и медленнее.") }
 
             if AIEngine.onDeviceReady {
-                Section { Label("Apple Intelligence на устройстве доступна", systemImage: "apple.logo") }
-                    footer: { Text("Если локальная модель не скачана — используется системная модель Apple.") }
+                Section { Label("Apple Intelligence доступна", systemImage: "apple.logo") }
             }
 
             Section {
                 SecureField("Gemini API-ключ", text: $geminiKey)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                     .onChange(of: geminiKey) { _ in Keychain.set(geminiKey, for: "gemini_key") }
-            } header: { Text("Gemini (запасной вариант)") }
-            footer: { Text("Ключ с aistudio.google.com. Используется, только если нет локальной и системной модели. Текст чата уходит в Google.") }
+            } header: { Text("Gemini") } footer: { Text("Ключ с aistudio.google.com.") }
+
+            Section {
+                SecureField("OpenRouter API-ключ", text: $orKey)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    .onChange(of: orKey) { _ in Keychain.set(orKey, for: "openrouter_key") }
+                TextField("Модель (напр. openai/gpt-4o-mini)", text: $orModel)
+                    .autocorrectionDisabled().textInputAutocapitalization(.never)
+            } header: { Text("OpenRouter") }
+            footer: { Text("Ключ с openrouter.ru/openrouter.ai. Доступ к десяткам моделей (в т.ч. бесплатным). Текст чата уходит на их серверы.") }
         }
         .navigationTitle("Нейросеть").navigationBarTitleDisplayMode(.inline)
+    }
+
+    @ViewBuilder private func modelRow(_ m: LocalModel) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(m.name).font(.body)
+                    Text("~\(m.sizeMB) МБ · \(m.fitLabel)")
+                        .font(.caption).foregroundStyle(m.fits ? .secondary : .orange)
+                }
+                Spacer()
+                if local.isDownloaded(m.id) {
+                    if local.activeId == m.id {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    } else {
+                        Button("Выбрать") { local.setActive(m.id) }
+                    }
+                } else if local.downloadingId == m.id {
+                    EmptyView()
+                } else {
+                    Button { local.download(m) } label: { Image(systemName: "arrow.down.circle") }
+                        .disabled(local.downloadingId != nil)
+                }
+            }
+            if local.downloadingId == m.id {
+                ProgressView(value: local.progress)
+                Text("\(Int(local.progress * 100))%  ·  \(local.speed)")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if local.isDownloaded(m.id) {
+                Button(role: .destructive) { local.delete(m.id) } label: {
+                    Text("Удалить").font(.caption)
+                }
+            }
+        }
     }
 }
