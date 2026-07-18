@@ -26,8 +26,14 @@ struct VKPhazApp: App {
 struct RootView: View {
     @EnvironmentObject var store: AccountStore
     @EnvironmentObject var live: LiveUpdates
+    @StateObject private var captcha = CaptchaCenter.shared
 
     var body: some View {
+        content
+            .overlay { if let ch = captcha.challenge { CaptchaView(challenge: ch) } }
+    }
+
+    @ViewBuilder private var content: some View {
         if let vk = store.vk, let acc = store.active {
             TabView {
                 Tab("Чаты", systemImage: "bubble.left.and.bubble.right.fill") {

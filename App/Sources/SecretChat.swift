@@ -119,8 +119,8 @@ enum SecretChat {
         let (x, y) = mine.lexicographicallyPrecedes(p.idPub) ? (mine, p.idPub) : (p.idPub, mine)
         let digest = Array(SHA256.hash(data: x + y))
         let groups = stride(from: 0, to: 10, by: 2).map { i -> String in
-            let v = (UInt16(digest[i]) << 8) | UInt16(digest[i + 1])
-            return String(format: "%05d", v % 100000)
+            let v = (UInt32(digest[i]) << 8) | UInt32(digest[i + 1])
+            return String(format: "%05d", Int(v))
         }
         return groups.joined(separator: " ")
     }

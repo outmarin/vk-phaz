@@ -2,7 +2,12 @@ import Foundation
 
 // MARK: - Wire models (only fields we use)
 
-struct VKError: Decodable, Error { let error_code: Int; let error_msg: String }
+struct VKError: Decodable, Error {
+    let error_code: Int
+    let error_msg: String
+    var captcha_sid: String? = nil
+    var captcha_img: String? = nil
+}
 struct VKResponse<T: Decodable>: Decodable { let response: T?; let error: VKError? }
 struct VKIgnored: Decodable {}  // for responses whose body we don't need
 
@@ -172,7 +177,7 @@ struct VK {
         return (names, avatars)
     }
 
-    private func call<T: Decodable>(_ method: String, _ params: [String: String]) async throws -> T {
+    private func call<T: Decodable>(_ method: String, _ params: [String: String], retries: Int = 1) async throws -> T {
         var comps = URLComponents()
         var q = params
         q["access_token"] = token
@@ -184,7 +189,16 @@ struct VK {
         req.httpBody = comps.percentEncodedQuery?.data(using: .utf8)
         let (data, _) = try await URLSession.shared.data(for: req)
         let wrapped = try JSONDecoder().decode(VKResponse<T>.self, from: data)
-        if let e = wrapped.error { throw e }
+        if let e = wrapped.error {
+            // error 14 = captcha: show it, get the user's answer, retry once with the key.
+            if e.error_code == 14, retries > 0, let sid = e.captcha_sid, let img = e.captcha_img {
+                if let key = await CaptchaCenter.shared.request(sid: sid, imageURL: img) {
+                    var p = params; p["captcha_sid"] = sid; p["captcha_key"] = key
+                    return try await call(method, p, retries: retries - 1)
+                }
+            }
+            throw e
+        }
         guard let r = wrapped.response else { throw VKError(error_code: -1, error_msg: "Пустой ответ") }
         return r
     }
