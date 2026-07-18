@@ -1,126 +1,118 @@
 import Foundation
 import CryptoKit
 
-// E2E secret chat over VK, following CryptoLayer's model — but done entirely on-device:
-// keys/plaintext never leave the phone; VK only ever carries ciphertext.
-//   identity  : Ed25519 (long-term, TOFU-verified via a safety number)
-//   handshake : X25519 ECDH -> HKDF-SHA256 -> AES key; kex key signed by identity
-//   messages  : AES-GCM (CryptoKit combined = nonce+ct+tag), base64, sent as a marked VK message
+// Secret chat on the CryptoLayer model: no own server — VK itself is the untrusted "wire".
+// Only ciphertext ever travels through VK. Identity is exchanged OUT OF BAND (you share your ID,
+// the peer adds it), so there is no MITM window. All keys/crypto stay on the device.
+//   identity : Ed25519 — your ID is its public key; sharing/adding it IS the authentication
+//   session  : X25519 ECDH -> HKDF-SHA256 -> AES-GCM; the kex key is signed by identity
 enum SecretChat {
-    static let initMarker = "TKCL1I:"      // handshake: identity + kex pub + signature
-    static let msgMarker = "TKCL1M:"       // encrypted message
-    static func isMarker(_ t: String) -> Bool { t.hasPrefix(initMarker) || t.hasPrefix(msgMarker) }
+    static let hMarker = "TKCLH:"   // handshake (kex pub + signature), sent through VK
+    static let mMarker = "TKCLM:"   // encrypted message, sent through VK
+    static func isMarker(_ t: String) -> Bool { t.hasPrefix(hMarker) || t.hasPrefix(mMarker) }
 
-    // MARK: device long-term keys (per account), stored in Keychain (device-only)
+    // MARK: device keys (in Keychain, never leave the device)
 
-    static func identity(_ own: Int) -> Curve25519.Signing.PrivateKey {
-        let name = "cl_id_\(own)"
-        if let s = Keychain.get(name), let d = Data(base64Encoded: s),
+    static var identity: Curve25519.Signing.PrivateKey {
+        if let s = Keychain.get("sc_id"), let d = Data(base64Encoded: s),
            let k = try? Curve25519.Signing.PrivateKey(rawRepresentation: d) { return k }
         let k = Curve25519.Signing.PrivateKey()
-        Keychain.set(k.rawRepresentation.base64EncodedString(), for: name)
+        Keychain.set(k.rawRepresentation.base64EncodedString(), for: "sc_id")
         return k
     }
-
-    static func kex(_ own: Int) -> Curve25519.KeyAgreement.PrivateKey {
-        let name = "cl_kex_\(own)"
-        if let s = Keychain.get(name), let d = Data(base64Encoded: s),
+    static var kex: Curve25519.KeyAgreement.PrivateKey {
+        if let s = Keychain.get("sc_kex"), let d = Data(base64Encoded: s),
            let k = try? Curve25519.KeyAgreement.PrivateKey(rawRepresentation: d) { return k }
         let k = Curve25519.KeyAgreement.PrivateKey()
-        Keychain.set(k.rawRepresentation.base64EncodedString(), for: name)
+        Keychain.set(k.rawRepresentation.base64EncodedString(), for: "sc_kex")
         return k
     }
+    static var myId: String { identity.publicKey.rawRepresentation.base64EncodedString() }
 
-    // MARK: peer keys (public, trust-on-first-use)
+    // MARK: per-VK-peer session record (credentials saved on device, reused, tied to that chat)
 
-    struct PeerKeys: Codable { let idPub: Data; let kexPub: Data }
-    private static func peerName(_ own: Int, _ peer: Int) -> String { "clpeer_\(own)_\(peer)" }
-
-    static func peerKeys(_ own: Int, _ peer: Int) -> PeerKeys? {
-        guard let s = UserDefaults.standard.string(forKey: peerName(own, peer)),
-              let d = Data(base64Encoded: s) else { return nil }
-        return try? JSONDecoder().decode(PeerKeys.self, from: d)
+    struct Rec: Codable { var idPub: Data; var kexPub: Data? }
+    private static func name(_ peer: Int) -> String { "screc_\(peer)" }
+    static func rec(_ peer: Int) -> Rec? {
+        guard let s = UserDefaults.standard.string(forKey: name(peer)), let d = Data(base64Encoded: s) else { return nil }
+        return try? JSONDecoder().decode(Rec.self, from: d)
     }
-    private static func store(_ own: Int, _ peer: Int, _ pk: PeerKeys) {
-        if let d = try? JSONEncoder().encode(pk) {
-            UserDefaults.standard.set(d.base64EncodedString(), forKey: peerName(own, peer))
-        }
+    private static func save(_ peer: Int, _ r: Rec) {
+        if let d = try? JSONEncoder().encode(r) { UserDefaults.standard.set(d.base64EncodedString(), forKey: name(peer)) }
     }
-    static func forget(_ own: Int, _ peer: Int) {
-        UserDefaults.standard.removeObject(forKey: peerName(own, peer))
-    }
-    static func established(_ own: Int, _ peer: Int) -> Bool { peerKeys(own, peer) != nil }
+    static func disable(_ peer: Int) { UserDefaults.standard.removeObject(forKey: name(peer)) }
+    static func hasPeerId(_ peer: Int) -> Bool { rec(peer) != nil }
+    static func established(_ peer: Int) -> Bool { rec(peer)?.kexPub != nil }
 
-    // MARK: handshake
-
-    static func myInit(own: Int, peer: Int) -> String {
-        let id = identity(own), kx = kex(own)
-        let kexPub = kx.publicKey.rawRepresentation
-        let sig = (try? id.signature(for: kexPub)) ?? Data()
-        let obj = ["i": id.publicKey.rawRepresentation.base64EncodedString(),
-                   "k": kexPub.base64EncodedString(),
-                   "s": sig.base64EncodedString()]
-        let json = (try? JSONSerialization.data(withJSONObject: obj)) ?? Data()
-        return initMarker + json.base64EncodedString()
+    // Add the peer's out-of-band ID (their identity public key). Resets any old session.
+    @discardableResult
+    static func addPeer(_ peer: Int, idB64: String) -> Bool {
+        let clean = idB64.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let d = Data(base64Encoded: clean),
+              (try? Curve25519.Signing.PublicKey(rawRepresentation: d)) != nil,
+              d != identity.publicKey.rawRepresentation else { return false }
+        save(peer, Rec(idPub: d, kexPub: nil))
+        return true
     }
 
-    enum InitResult { case established, changedIdentity, invalid }
+    // MARK: handshake (sent through VK, but verified against the out-of-band ID)
+
+    static func myHandshake() -> String {
+        let kexPub = kex.publicKey.rawRepresentation
+        let sig = (try? identity.signature(for: kexPub)) ?? Data()
+        let obj = ["k": kexPub.base64EncodedString(), "s": sig.base64EncodedString()]
+        return hMarker + ((try? JSONSerialization.data(withJSONObject: obj)) ?? Data()).base64EncodedString()
+    }
+
+    enum HS { case established, badIdentity, ignored }
 
     @discardableResult
-    static func processInit(own: Int, peer: Int, text: String) -> InitResult {
-        guard text.hasPrefix(initMarker),
-              let raw = Data(base64Encoded: String(text.dropFirst(initMarker.count))),
+    static func processHandshake(_ peer: Int, _ text: String) -> HS {
+        guard text.hasPrefix(hMarker), var r = rec(peer),   // peer ID must be added first
+              let raw = Data(base64Encoded: String(text.dropFirst(hMarker.count))),
               let obj = (try? JSONSerialization.jsonObject(with: raw)) as? [String: String],
-              let idB = obj["i"].flatMap({ Data(base64Encoded: $0) }),
               let kexB = obj["k"].flatMap({ Data(base64Encoded: $0) }),
               let sigB = obj["s"].flatMap({ Data(base64Encoded: $0) }),
-              let idPub = try? Curve25519.Signing.PublicKey(rawRepresentation: idB)
-        else { return .invalid }
-        // kex key must be signed by the claimed identity
-        guard idPub.isValidSignature(sigB, for: kexB) else { return .invalid }
-        // TOFU: refuse to silently replace a known identity (MITM guard)
-        if let existing = peerKeys(own, peer), existing.idPub != idB { return .changedIdentity }
-        store(own, peer, PeerKeys(idPub: idB, kexPub: kexB))
+              let idPub = try? Curve25519.Signing.PublicKey(rawRepresentation: r.idPub) else { return .ignored }
+        guard idPub.isValidSignature(sigB, for: kexB) else { return .badIdentity }
+        r.kexPub = kexB
+        save(peer, r)
         return .established
     }
 
     // MARK: crypto
 
-    private static func sharedKey(_ own: Int, _ peer: Int) -> SymmetricKey? {
-        guard let p = peerKeys(own, peer),
-              let peerKexPub = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: p.kexPub),
-              let secret = try? kex(own).sharedSecretFromKeyAgreement(with: peerKexPub) else { return nil }
+    private static func sharedKey(_ peer: Int) -> SymmetricKey? {
+        guard let kexPub = rec(peer)?.kexPub,
+              let pk = try? Curve25519.KeyAgreement.PublicKey(rawRepresentation: kexPub),
+              let secret = try? kex.sharedSecretFromKeyAgreement(with: pk) else { return nil }
         return secret.hkdfDerivedSymmetricKey(using: SHA256.self,
-                                              salt: Data("TK-CryptoLayer-v1".utf8),
+                                              salt: Data("TK-SecretChat-v1".utf8),
                                               sharedInfo: Data(), outputByteCount: 32)
     }
 
-    static func encrypt(own: Int, peer: Int, _ plaintext: String) -> String? {
-        guard let key = sharedKey(own, peer),
-              let box = try? AES.GCM.seal(Data(plaintext.utf8), using: key),
-              let combined = box.combined else { return nil }
-        return msgMarker + combined.base64EncodedString()
+    static func encrypt(_ peer: Int, _ text: String) -> String? {
+        guard let key = sharedKey(peer),
+              let box = try? AES.GCM.seal(Data(text.utf8), using: key),
+              let c = box.combined else { return nil }
+        return mMarker + c.base64EncodedString()
     }
-
-    static func decrypt(own: Int, peer: Int, _ text: String) -> String? {
-        guard text.hasPrefix(msgMarker),
-              let d = Data(base64Encoded: String(text.dropFirst(msgMarker.count))),
-              let key = sharedKey(own, peer),
+    static func decrypt(_ peer: Int, _ text: String) -> String? {
+        guard text.hasPrefix(mMarker),
+              let d = Data(base64Encoded: String(text.dropFirst(mMarker.count))),
+              let key = sharedKey(peer),
               let box = try? AES.GCM.SealedBox(combined: d),
               let pt = try? AES.GCM.open(box, using: key) else { return nil }
         return String(data: pt, encoding: .utf8)
     }
 
-    // MARK: safety number (compare out-of-band to detect MITM)
-
-    static func safetyNumber(own: Int, peer: Int) -> String? {
-        guard let p = peerKeys(own, peer) else { return nil }
-        let mine = identity(own).publicKey.rawRepresentation
-        let (x, y) = mine.lexicographicallyPrecedes(p.idPub) ? (mine, p.idPub) : (p.idPub, mine)
-        let digest = Array(SHA256.hash(data: x + y))
+    static func safetyNumber(_ peer: Int) -> String? {
+        guard let r = rec(peer) else { return nil }
+        let mine = identity.publicKey.rawRepresentation
+        let (a, b) = mine.lexicographicallyPrecedes(r.idPub) ? (mine, r.idPub) : (r.idPub, mine)
+        let digest = Array(SHA256.hash(data: a + b))
         let groups = stride(from: 0, to: 10, by: 2).map { i -> String in
-            let v = (UInt32(digest[i]) << 8) | UInt32(digest[i + 1])
-            return String(format: "%05d", Int(v))
+            String(format: "%05d", Int((UInt32(digest[i]) << 8) | UInt32(digest[i + 1])))
         }
         return groups.joined(separator: " ")
     }

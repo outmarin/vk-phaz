@@ -68,7 +68,7 @@ struct ChatView: View {
     @State private var wpRefresh = 0
     @State private var secretOn = false
     @State private var secretStatus = ""
-    @State private var showSafety = false
+    @State private var showSecretSetup = false
     @State private var secretText: [Int: String] = [:]   // msg.id -> decrypted/annotated display
     @State private var showWallpaperPicker = false
     @State private var wallpaperItem: PhotosPickerItem?
@@ -117,11 +117,8 @@ struct ChatView: View {
                     }
                     if isUser && peerId != ownId {
                         Button { showProfile = true } label: { Label("Профиль", systemImage: "person.crop.circle") }
-                        Button { Task { await startSecret() } } label: {
+                        Button { showSecretSetup = true } label: {
                             Label(secretOn ? "Секретный чат вкл." : "Секретный чат", systemImage: "lock.shield")
-                        }
-                        if SecretChat.established(ownId, peerId) {
-                            Button { showSafety = true } label: { Label("Отпечаток безопасности", systemImage: "checkmark.shield") }
                         }
                     }
                 } label: {
@@ -169,8 +166,8 @@ struct ChatView: View {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
         .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
-        .sheet(isPresented: $showSafety) {
-            SafetyNumberView(title: title, number: SecretChat.safetyNumber(own: ownId, peer: peerId) ?? "—")
+        .sheet(isPresented: $showSecretSetup) {
+            SecretSetupView(peer: peerId, title: title) { await connectSecret() }
         }
         .fullScreenCover(item: $viewerURL) { PhotoViewer(url: $0.url) }
         .sheet(isPresented: $showAttach) {
@@ -428,41 +425,35 @@ struct ChatView: View {
         catch { self.error = error.localizedDescription }
     }
 
-    // Process handshake messages + decrypt secret messages for display.
+    // Process handshakes + decrypt secret messages for display (VK is only the wire).
     private func processSecret() {
-        guard isUser, peerId != ownId else { return }
+        guard isUser, peerId != ownId, SecretChat.hasPeerId(peerId) else { return }
         var map: [Int: String] = [:]
         for cm in messages {
             let t = cm.msg.text
-            if t.hasPrefix(SecretChat.initMarker) {
+            if t.hasPrefix(SecretChat.hMarker) {
                 if cm.msg.from_id != ownId {
-                    switch SecretChat.processInit(own: ownId, peer: peerId, text: t) {
+                    switch SecretChat.processHandshake(peerId, t) {
                     case .established: secretStatus = "🔒 защищено"
-                    case .changedIdentity: secretStatus = "⚠️ ключ собеседника изменился!"
-                    case .invalid: break
+                    case .badIdentity: secretStatus = "⚠️ подпись не совпала с ID!"
+                    case .ignored: break
                     }
                 }
-                map[cm.msg.id] = "🔐 Обмен ключами защищённого чата"
-            } else if t.hasPrefix(SecretChat.msgMarker) {
-                if let pt = SecretChat.decrypt(own: ownId, peer: peerId, t) {
-                    map[cm.msg.id] = "🔒 " + pt
-                } else {
-                    map[cm.msg.id] = "🔒 зашифрованное сообщение"
-                }
+                map[cm.msg.id] = "🔐 Обмен ключами"
+            } else if t.hasPrefix(SecretChat.mMarker) {
+                map[cm.msg.id] = SecretChat.decrypt(peerId, t).map { "🔒 " + $0 } ?? "🔒 зашифровано"
             }
         }
         secretText = map
-        if SecretChat.established(ownId, peerId) {
-            secretOn = true
-            if secretStatus.isEmpty { secretStatus = "🔒 защищено" }
-        }
+        if SecretChat.hasPeerId(peerId) { secretOn = true }
+        if SecretChat.established(peerId), secretStatus.isEmpty { secretStatus = "🔒 защищено" }
     }
 
-    private func startSecret() async {
+    // Called from setup after the peer's ID is added: announce our handshake over VK.
+    private func connectSecret() async {
         secretOn = true
-        secretStatus = SecretChat.established(ownId, peerId) ? "🔒 защищено" : "ожидание собеседника…"
-        let initMsg = SecretChat.myInit(own: ownId, peer: peerId)
-        do { try await vk.send(peerId: peerId, text: initMsg); await load() }
+        secretStatus = SecretChat.established(peerId) ? "🔒 защищено" : "ожидание собеседника…"
+        do { try await vk.send(peerId: peerId, text: SecretChat.myHandshake()); await load() }
         catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
     }
@@ -482,8 +473,8 @@ struct ChatView: View {
         let atts = pending.map { $0.attachment }.joined(separator: ",")
         pending = []
         // Secret chat: encrypt text before it leaves the device (attachments stay plain — not covered).
-        if secretOn, atts.isEmpty, SecretChat.established(ownId, peerId),
-           let enc = SecretChat.encrypt(own: ownId, peer: peerId, text) {
+        if secretOn, atts.isEmpty, SecretChat.established(peerId),
+           let enc = SecretChat.encrypt(peerId, text) {
             do { try await vk.send(peerId: peerId, text: enc); await load() }
             catch let e as VKError { error = e.error_msg }
             catch { self.error = error.localizedDescription }
@@ -694,6 +685,61 @@ struct MessageRow: View {
         if let u = d.url.flatMap({ URL(string: $0) }) {
             Link(destination: u) { row }.foregroundStyle(mine ? .white : .primary)
         } else { row }
+    }
+}
+
+struct SecretSetupView: View {
+    let peer: Int
+    let title: String
+    let onConnect: () async -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var peerId = ""
+    @State private var status = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Ваш ID") {
+                    Text(SecretChat.myId).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
+                    Button { UIPasteboard.general.string = SecretChat.myId } label: {
+                        Label("Скопировать", systemImage: "doc.on.doc")
+                    }
+                } footer: {
+                    Text("Передай этот ID собеседнику ВНЕ VK (лично, другим мессенджером). Тогда VK не сможет подменить ключи.")
+                }
+
+                Section("ID собеседника") {
+                    TextField("Вставь ID собеседника", text: $peerId, axis: .vertical)
+                        .font(.system(.footnote, design: .monospaced))
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                    Button {
+                        if SecretChat.addPeer(peer, idB64: peerId) {
+                            Task { await onConnect() }
+                            status = "Запрос отправлен. Пусть собеседник добавит твой ID и тоже включит секретный чат."
+                        } else { status = "Неверный ID" }
+                    } label: { Label("Подключить", systemImage: "link") }
+                        .disabled(peerId.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+
+                if SecretChat.established(peer), let sn = SecretChat.safetyNumber(peer) {
+                    Section("Отпечаток безопасности") {
+                        Text(sn).font(.system(.body, design: .monospaced)).textSelection(.enabled)
+                    } footer: {
+                        Text("Сравни это число с \(title) вне VK. Совпало — подмены нет.")
+                    }
+                }
+                if SecretChat.hasPeerId(peer) {
+                    Section {
+                        Button(role: .destructive) { SecretChat.disable(peer); dismiss() } label: {
+                            Text("Отключить секретный чат")
+                        }
+                    }
+                }
+                if !status.isEmpty { Section { Text(status).font(.caption).foregroundStyle(.secondary) } }
+            }
+            .navigationTitle("Секретный чат").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
+        }
     }
 }
 
