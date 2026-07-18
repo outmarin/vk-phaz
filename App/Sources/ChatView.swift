@@ -47,8 +47,14 @@ struct ChatView: View {
     @State private var error: String?
     @State private var peerProfile: Profile?
     @State private var showProfile = false
-    @State private var showSearch = false
+    @State private var showAI = false
     @State private var showAttach = false
+    @State private var searchMode = false
+    @State private var searchText = ""
+    @State private var matchIds: [Int] = []
+    @State private var matchIdx = 0
+    @State private var highlightId: Int?
+    @State private var searching = false
     @State private var showStickers = false
     @State private var showPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
@@ -85,7 +91,8 @@ struct ChatView: View {
         ZStack {
             WallpaperBackground(peerId: peerId, refresh: wpRefresh)
             messageList
-                .safeAreaInset(edge: .bottom) { bottomBar }
+                .safeAreaInset(edge: .top) { if searchMode { searchBar } }
+                .safeAreaInset(edge: .bottom) { if searchMode { searchNavBar } else { bottomBar } }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar(.hidden, for: .tabBar)
@@ -105,7 +112,7 @@ struct ChatView: View {
                 .buttonStyle(.plain)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
+                Button { withAnimation { searchMode = true } } label: { Image(systemName: "magnifyingglass") }
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
@@ -143,7 +150,7 @@ struct ChatView: View {
         .sheet(isPresented: $showProfile) {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
-        .sheet(isPresented: $showSearch) { MessageSearchSheet(vk: vk, peerId: peerId) }
+        .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
         .sheet(isPresented: $showAttach) {
             AttachSheet(
                 onImageData: { data in showAttach = false; Task { await addPhoto(data) } },
@@ -185,7 +192,8 @@ struct ChatView: View {
                     ForEach(timeline, id: \.cm.id) { pair in
                         if let day = pair.day { dayChip(day) }
                         MessageRow(cm: pair.cm, mine: pair.cm.msg.from_id == ownId,
-                                   isChat: isChat, readUpTo: outRead)
+                                   isChat: isChat, readUpTo: outRead,
+                                   highlighted: highlightId == pair.cm.id)
                             .id(pair.cm.id)
                             .onLongPressGesture { selected = pair.cm }
                     }
@@ -197,9 +205,74 @@ struct ChatView: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .onChange(of: messages.count) { _ in
-                if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+                if highlightId == nil, let last = messages.last {
+                    withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
+                }
+            }
+            .onChange(of: highlightId) { id in
+                if let id { withAnimation { proxy.scrollTo(id, anchor: .center) } }
             }
         }
+    }
+
+    private var searchBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+            TextField("Поиск в чате", text: $searchText)
+                .autocorrectionDisabled()
+                .onSubmit { Task { await runSearch() } }
+            if searching { ProgressView() }
+            Button { showAI = true } label: { Image(systemName: "sparkles") }
+            Button("Отмена") { closeSearch() }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.ultraThinMaterial)
+    }
+
+    private var searchNavBar: some View {
+        HStack {
+            Text(matchIds.isEmpty ? "Нет совпадений" : "\(matchIdx + 1)/\(matchIds.count)")
+                .font(.subheadline).foregroundStyle(.secondary)
+            Spacer()
+            Button { step(-1) } label: { Image(systemName: "chevron.up") }
+                .disabled(matchIdx <= 0)
+            Button { step(1) } label: { Image(systemName: "chevron.down") }
+                .disabled(matchIdx >= matchIds.count - 1)
+        }
+        .font(.title3)
+        .padding(.horizontal, 20).padding(.vertical, 12)
+        .background(.ultraThinMaterial)
+    }
+
+    private func runSearch() async {
+        let q = searchText.trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty else { return }
+        searching = true
+        matchIds = (try? await vk.searchIds(peerId: peerId, query: q)) ?? []
+        searching = false
+        if !matchIds.isEmpty { matchIdx = matchIds.count - 1; await goto() }  // start at newest match
+    }
+
+    private func step(_ d: Int) {
+        let n = matchIdx + d
+        guard n >= 0 && n < matchIds.count else { return }
+        matchIdx = n
+        Task { await goto() }
+    }
+
+    private func goto() async {
+        guard matchIds.indices.contains(matchIdx) else { return }
+        let id = matchIds[matchIdx]
+        if !messages.contains(where: { $0.msg.id == id }) {
+            if let window = try? await vk.historyAround(peerId: peerId, messageId: id) { messages = window }
+        }
+        highlightId = id
+    }
+
+    private func closeSearch() {
+        withAnimation { searchMode = false }
+        searchText = ""; matchIds = []; highlightId = nil
+        Task { await load() }
     }
 
     private func dayChip(_ day: String) -> some View {
@@ -414,6 +487,7 @@ struct MessageRow: View {
     let mine: Bool
     let isChat: Bool
     var readUpTo: Int = 0
+    var highlighted: Bool = false
     private var msg: Msg { cm.msg }
 
     private var bubbleShape: UnevenRoundedRectangle {
@@ -438,6 +512,7 @@ struct MessageRow: View {
             if !mine { Spacer(minLength: 48) }
         }
         .padding(.horizontal, 10)
+        .background(highlighted ? Color.yellow.opacity(0.25) : .clear)
     }
 
     @ViewBuilder private var content: some View {
@@ -597,67 +672,3 @@ struct StickerSheet: View {
     }
 }
 
-// MARK: - In-chat search (word + date)
-
-struct MessageSearchSheet: View {
-    let vk: VK
-    let peerId: Int
-    @Environment(\.dismiss) private var dismiss
-    @State private var query = ""
-    @State private var useDate = false
-    @State private var date = Date()
-    @State private var results: [ChatMessage] = []
-    @State private var loading = false
-    @State private var showAI = false
-
-    var body: some View {
-        NavigationStack {
-            VStack(spacing: 0) {
-                VStack(spacing: 8) {
-                    Toggle("Искать до даты", isOn: $useDate)
-                    if useDate {
-                        DatePicker("Дата", selection: $date, displayedComponents: .date)
-                            .datePickerStyle(.compact)
-                    }
-                }
-                .padding(.horizontal)
-                List(results) { cm in
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text(cm.msg.text.isEmpty ? cm.msg.preview : cm.msg.text).lineLimit(2)
-                        Text(cm.senderName + " · " + fullDate(cm.msg.date))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-                .listStyle(.plain)
-                .overlay {
-                    if loading { ProgressView() }
-                    else if results.isEmpty { Text("Введи слово и нажми Найти").foregroundStyle(.secondary) }
-                }
-            }
-            .searchable(text: $query, prompt: "Слово или фраза")
-            .onSubmit(of: .search) { Task { await run() } }
-            .onChange(of: useDate) { _ in Task { await run() } }
-            .onChange(of: date) { _ in Task { await run() } }
-            .navigationTitle("Поиск в чате")
-            .navigationBarTitleDisplayMode(.inline)
-            .safeAreaInset(edge: .top) {
-                Button { showAI = true } label: {
-                    Label("Спросить ИИ по всему чату", systemImage: "sparkles")
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 10)
-                        .background(Color.accentColor.opacity(0.15), in: Capsule())
-                }
-                .padding(.horizontal).padding(.top, 4)
-            }
-            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
-            .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
-        }
-    }
-
-    private func run() async {
-        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
-        loading = true
-        results = (try? await vk.search(peerId: peerId, query: query, before: useDate ? date : nil)) ?? []
-        loading = false
-    }
-}

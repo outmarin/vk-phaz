@@ -235,6 +235,22 @@ struct VK {
         return h.count ?? 0
     }
 
+    // A window of messages centered on a specific message (for in-chat search jump).
+    func historyAround(peerId: Int, messageId: Int, count: Int = 40) async throws -> [ChatMessage] {
+        let h: HistoryResponse = try await call("messages.getHistory",
+            ["peer_id": String(peerId), "start_message_id": String(messageId),
+             "offset": String(-count / 2), "count": String(count),
+             "extended": "1", "fields": "photo_100"])
+        return resolve(h.items.reversed(), h.profiles, h.groups)
+    }
+
+    // Search returns matching message ids, oldest-first, for stepping through in the chat.
+    func searchIds(peerId: Int, query: String) async throws -> [Int] {
+        let h: HistoryResponse = try await call("messages.search",
+            ["peer_id": String(peerId), "q": query, "count": "200"])
+        return h.items.map { $0.id }.sorted()
+    }
+
     func search(peerId: Int, query: String, before: Date? = nil) async throws -> [ChatMessage] {
         var p = ["peer_id": String(peerId), "q": query, "count": "100",
                  "extended": "1", "fields": "photo_100"]
