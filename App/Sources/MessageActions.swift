@@ -5,7 +5,10 @@ struct MessageActionsOverlay: View {
     let cm: ChatMessage
     let mine: Bool
     let isChat: Bool
+    var statusText: String? = nil
+    let hasReactions: Bool
     let onReact: (Int) -> Void
+    let onRemoveReaction: () -> Void
     let onReply: () -> Void
     let onCopy: () -> Void
     let onPin: () -> Void
@@ -21,6 +24,9 @@ struct MessageActionsOverlay: View {
                 reactionPill
                 MessageRow(cm: cm, mine: mine, isChat: isChat)
                     .allowsHitTesting(false)
+                if let statusText {
+                    Text(statusText).font(.caption2).foregroundStyle(.white.opacity(0.85))
+                }
                 menu
             }
             .padding(.horizontal, 20)
@@ -46,6 +52,10 @@ struct MessageActionsOverlay: View {
             row("Копировать", "doc.on.doc", action: onCopy)
             Divider()
             row("Закрепить", "pin", action: onPin)
+            if hasReactions {
+                Divider()
+                row("Убрать реакцию", "face.dashed", action: onRemoveReaction)
+            }
             Divider()
             row("Удалить у себя", "trash", destructive: true, action: onDeleteForMe)
             if mine {

@@ -87,10 +87,12 @@ struct AttachSheet: View {
                                     if let d = await fullImageData(asset) { onImageData(d); dismiss() }
                                 }
                             } label: {
-                                PhotoThumb(asset: asset)
-                                    .aspectRatio(1, contentMode: .fill)
-                                    .clipped()
+                                Color.clear
+                                    .aspectRatio(1, contentMode: .fit)   // square cell
+                                    .overlay { PhotoThumb(asset: asset) }
+                                    .clipShape(RoundedRectangle(cornerRadius: 4))
                             }
+                            .buttonStyle(.plain)
                         }
                     }
                     .padding(3)

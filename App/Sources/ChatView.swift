@@ -48,7 +48,6 @@ struct ChatView: View {
     @State private var peerProfile: Profile?
     @State private var showProfile = false
     @State private var showSearch = false
-    @State private var showAI = false
     @State private var showAttach = false
     @State private var showStickers = false
     @State private var showPhotoPicker = false
@@ -56,6 +55,7 @@ struct ChatView: View {
     @State private var showFileImporter = false
     @State private var uploading = false
     @State private var lastTyping = Date.distantPast
+    @State private var outRead = 0
     @State private var wpRefresh = 0
     @State private var showWallpaperPicker = false
     @State private var wallpaperItem: PhotosPickerItem?
@@ -105,9 +105,6 @@ struct ChatView: View {
                 .buttonStyle(.plain)
             }
             ToolbarItem(placement: .topBarTrailing) {
-                Button { showAI = true } label: { Image(systemName: "sparkles") }
-            }
-            ToolbarItem(placement: .topBarTrailing) {
                 Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
             }
             ToolbarItem(placement: .topBarTrailing) {
@@ -131,7 +128,10 @@ struct ChatView: View {
         .fullScreenCover(item: $selected) { cm in
             MessageActionsOverlay(
                 cm: cm, mine: cm.msg.from_id == ownId, isChat: isChat,
+                statusText: cm.msg.from_id == ownId ? (cm.msg.id <= outRead ? "Прочитано" : "Отправлено") : nil,
+                hasReactions: !(cm.msg.reactions ?? []).isEmpty,
                 onReact: { rid in Task { await react(cm, rid) } },
+                onRemoveReaction: { Task { await removeReaction(cm) } },
                 onReply: { replyingTo = cm },
                 onCopy: { UIPasteboard.general.string = cm.msg.text },
                 onPin: { Task { await pin(cm) } },
@@ -144,7 +144,6 @@ struct ChatView: View {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
         .sheet(isPresented: $showSearch) { MessageSearchSheet(vk: vk, peerId: peerId) }
-        .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
         .sheet(isPresented: $showAttach) {
             AttachSheet(
                 onImageData: { data in showAttach = false; Task { await addPhoto(data) } },
@@ -185,7 +184,8 @@ struct ChatView: View {
                 LazyVStack(spacing: 3) {
                     ForEach(timeline, id: \.cm.id) { pair in
                         if let day = pair.day { dayChip(day) }
-                        MessageRow(cm: pair.cm, mine: pair.cm.msg.from_id == ownId, isChat: isChat)
+                        MessageRow(cm: pair.cm, mine: pair.cm.msg.from_id == ownId,
+                                   isChat: isChat, readUpTo: outRead)
                             .id(pair.cm.id)
                             .onLongPressGesture { selected = pair.cm }
                     }
@@ -210,7 +210,7 @@ struct ChatView: View {
             .padding(.vertical, 6)
     }
 
-    // Bottom: reply banner + attachment tray + input, on a translucent blurred bar (like the top).
+    // Bottom: floating glass controls over the wallpaper — no solid bar, blur only behind the controls.
     private var bottomBar: some View {
         VStack(spacing: 6) {
             if let reply = replyingTo { replyBanner(reply) }
@@ -219,7 +219,6 @@ struct ChatView: View {
             inputBar
         }
         .padding(.top, 6)
-        .background(.ultraThinMaterial)
     }
 
     private var attachmentTray: some View {
@@ -250,8 +249,10 @@ struct ChatView: View {
         HStack(spacing: 10) {
             Button { showAttach = true } label: {
                 Image(systemName: "paperclip").font(.title3).foregroundStyle(.secondary)
-                    .frame(width: 40, height: 40)
+                    .frame(width: 42, height: 42)
             }
+            .glassEffect(in: Circle())
+
             HStack(spacing: 6) {
                 TextField("Сообщение", text: $draft, axis: .vertical)
                     .onChange(of: draft) { _ in sendTyping() }
@@ -259,17 +260,17 @@ struct ChatView: View {
                     Image(systemName: "face.smiling").font(.title3).foregroundStyle(.secondary)
                 }
             }
-            .padding(.horizontal, 14).padding(.vertical, 9)
-            .background(Color(.secondarySystemFill), in: RoundedRectangle(cornerRadius: 20))
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .glassEffect(in: RoundedRectangle(cornerRadius: 22))
 
             if uploading {
-                ProgressView().frame(width: 40, height: 40)
+                ProgressView().frame(width: 42, height: 42)
             } else if draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && pending.isEmpty {
                 Image(systemName: recorder.recording ? "mic.fill" : "mic")
                     .font(.title3)
                     .foregroundStyle(recorder.recording ? .red : .secondary)
-                    .frame(width: 40, height: 40)
-                    .background(recorder.recording ? Color.red.opacity(0.15) : .clear, in: Circle())
+                    .frame(width: 42, height: 42)
+                    .glassEffect(in: Circle())
                     .onLongPressGesture(minimumDuration: 0.2, pressing: { pressing in
                         if pressing { recorder.start() } else { Task { await finishVoice() } }
                     }, perform: {})
@@ -277,7 +278,7 @@ struct ChatView: View {
                 Button { Task { await send() } } label: {
                     Image(systemName: "arrow.up")
                         .font(.body.weight(.bold)).foregroundStyle(.white)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 42, height: 42)
                         .background(Color.accentColor, in: Circle())
                 }
             }
@@ -303,7 +304,11 @@ struct ChatView: View {
     // MARK: actions
 
     private func load() async {
-        do { messages = try await vk.history(peerId: peerId); error = nil }
+        do {
+            messages = try await vk.history(peerId: peerId)
+            outRead = (try? await vk.outRead(peerId: peerId)) ?? outRead
+            error = nil
+        }
         catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
     }
@@ -381,9 +386,17 @@ struct ChatView: View {
     }
 
     private func delete(_ cm: ChatMessage, forAll: Bool) async {
-        do { try await vk.deleteMessages(ids: [cm.msg.id], forAll: forAll); await load() }
+        guard let cmid = cm.msg.conversation_message_id else { error = "Нельзя удалить это сообщение"; return }
+        do { try await vk.deleteMessages(peerId: peerId, cmids: [cmid], forAll: forAll); await load() }
         catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
+    }
+
+    private func removeReaction(_ cm: ChatMessage) async {
+        guard let cmid = cm.msg.conversation_message_id else { return }
+        do { try await vk.deleteReaction(peerId: peerId, cmid: cmid); await load() }
+        catch let e as VKError { error = e.error_msg }
+        catch {}
     }
 
     private func sendSticker(_ stickerId: Int) async {
@@ -400,6 +413,7 @@ struct MessageRow: View {
     let cm: ChatMessage
     let mine: Bool
     let isChat: Bool
+    var readUpTo: Int = 0
     private var msg: Msg { cm.msg }
 
     private var bubbleShape: UnevenRoundedRectangle {
@@ -467,6 +481,10 @@ struct MessageRow: View {
                 Text(hhmm(msg.date))
                     .font(.caption2)
                     .foregroundStyle(mine ? Color.white.opacity(0.75) : Color.secondary)
+                if mine {
+                    Text(msg.id <= readUpTo ? "✓✓" : "✓")
+                        .font(.caption2).foregroundStyle(Color.white.opacity(0.85))
+                }
             }
         }
         .padding(.horizontal, 12).padding(.vertical, 7)
@@ -590,6 +608,7 @@ struct MessageSearchSheet: View {
     @State private var date = Date()
     @State private var results: [ChatMessage] = []
     @State private var loading = false
+    @State private var showAI = false
 
     var body: some View {
         NavigationStack {
@@ -621,7 +640,17 @@ struct MessageSearchSheet: View {
             .onChange(of: date) { _ in Task { await run() } }
             .navigationTitle("Поиск в чате")
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .top) {
+                Button { showAI = true } label: {
+                    Label("Спросить ИИ по всему чату", systemImage: "sparkles")
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 10)
+                        .background(Color.accentColor.opacity(0.15), in: Capsule())
+                }
+                .padding(.horizontal).padding(.top, 4)
+            }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
+            .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
         }
     }
 

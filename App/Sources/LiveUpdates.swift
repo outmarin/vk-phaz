@@ -10,8 +10,10 @@ final class LiveUpdates: ObservableObject {
 
     private var task: Task<Void, Never>?
     private var currentPeer: Int?               // muted for notifications while chat is open
+    private var peerNames: [Int: String] = [:]  // peerId -> title, for notification headers
 
     func setActive(peer: Int?) { currentPeer = peer }
+    func setNames(_ m: [Int: String]) { for (k, v) in m { peerNames[k] = v } }
 
     func requestAuth() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { _, _ in }
@@ -62,7 +64,7 @@ final class LiveUpdates: ObservableObject {
             let text = (u.count > 5 ? u[5] as? String : "") ?? ""
             bump += 1
             let outgoing = flags & 2 != 0
-            if !outgoing && peer != currentPeer { notify(text.isEmpty ? "Вложение" : text) }
+            if !outgoing && peer != currentPeer { notify(peer: peer, text.isEmpty ? "Вложение" : text) }
         case 2, 5, 13:  // message deleted / edited / flags changed → reload so it reflects
             bump += 1
         case 61:  // typing in a dialog: [61, user_id, ...]
@@ -74,11 +76,12 @@ final class LiveUpdates: ObservableObject {
         }
     }
 
-    private func notify(_ body: String) {
-        TelegramNotifier.send(body)  // forwards to TG bot if configured
+    private func notify(peer: Int, _ body: String) {
+        let name = peerNames[peer] ?? "Новое сообщение"
+        TelegramNotifier.send("\(name): \(body)")  // forwards to TG bot if configured
         guard UserDefaults.standard.object(forKey: "notifsEnabled") as? Bool ?? true else { return }
         let c = UNMutableNotificationContent()
-        c.title = "Новое сообщение"
+        c.title = name
         c.body = body
         c.sound = .default
         UNUserNotificationCenter.current().add(

@@ -276,10 +276,23 @@ struct VK {
             ["peer_id": String(peerId), "cmid": String(cmid), "reaction_id": String(reactionId)])
     }
 
-    func deleteMessages(ids: [Int], forAll: Bool) async throws {
-        var p = ["message_ids": ids.map(String.init).joined(separator: ",")]
-        if forAll { p["delete_for_all"] = "1" }
-        let _: [String: Int]? = try? await call("messages.delete", p)  // returns {id:1} map
+    func deleteMessages(peerId: Int, cmids: [Int], forAll: Bool) async throws {
+        let p = ["peer_id": String(peerId),
+                 "cmids": cmids.map(String.init).joined(separator: ","),
+                 "delete_for_all": forAll ? "1" : "0"]
+        let _: VKIgnored = try await call("messages.delete", p)
+    }
+
+    func deleteReaction(peerId: Int, cmid: Int) async throws {
+        let _: VKIgnored = try await call("messages.deleteReaction",
+            ["peer_id": String(peerId), "cmid": String(cmid)])
+    }
+
+    // Last outgoing message id the peer has read. A message id <= this is "read" (✓✓).
+    func outRead(peerId: Int) async throws -> Int {
+        struct R: Decodable { let items: [Item]?; struct Item: Decodable { let out_read: Int? } }
+        let r: R = try await call("messages.getConversationsById", ["peer_ids": String(peerId)])
+        return r.items?.first?.out_read ?? 0
     }
 
     func forward(peerId: Int, messageIds: [Int]) async throws {

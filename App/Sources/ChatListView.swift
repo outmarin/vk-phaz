@@ -111,7 +111,11 @@ struct ChatListView: View {
     }
 
     private func load() async {
-        do { rows = try await vk.conversations(); error = nil }
+        do {
+            rows = try await vk.conversations()
+            live.setNames(Dictionary(rows.map { ($0.peerId, $0.title) }, uniquingKeysWith: { a, _ in a }))
+            error = nil
+        }
         catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
     }
