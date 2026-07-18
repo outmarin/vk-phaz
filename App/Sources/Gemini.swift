@@ -31,16 +31,22 @@ enum GeminiClient {
     }
 }
 
-// Prefers the on-device Apple model (iOS 26, no key/limits, private). Falls back to Gemini.
+// Priority: downloaded local model (any device) → Apple on-device → Gemini.
 enum AIEngine {
+    static var localReady: Bool { LocalLLM.shared.isDownloaded }
     static var onDeviceReady: Bool {
         if case .available = SystemLanguageModel.default.availability { return true }
         return false
     }
-    static var available: Bool { onDeviceReady || !(Keychain.get("gemini_key") ?? "").isEmpty }
-    static var engineName: String { onDeviceReady ? "на устройстве" : "Gemini" }
+    static var available: Bool { localReady || onDeviceReady || !(Keychain.get("gemini_key") ?? "").isEmpty }
+    static var engineName: String {
+        if localReady { return "локальная (скачанная)" }
+        if onDeviceReady { return "на устройстве" }
+        return "Gemini"
+    }
 
     static func complete(_ prompt: String) async throws -> String {
+        if localReady { return try await LocalLLM.shared.complete(prompt) }
         if onDeviceReady {
             let session = LanguageModelSession()
             let r = try await session.respond(to: prompt)

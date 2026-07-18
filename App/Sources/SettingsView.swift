@@ -136,23 +136,42 @@ struct NotificationSettings: View {
 }
 
 struct AISettings: View {
+    @StateObject private var local = LocalLLM.shared
     @State private var geminiKey = Keychain.get("gemini_key") ?? ""
+
     var body: some View {
         List {
             Section {
-                Label(AIEngine.onDeviceReady ? "Локальная модель на устройстве доступна"
-                                              : "Локальная модель недоступна на этом устройстве",
-                      systemImage: AIEngine.onDeviceReady ? "checkmark.seal.fill" : "xmark.seal")
-                    .foregroundStyle(AIEngine.onDeviceReady ? .green : .secondary)
-            } footer: {
-                Text("ИИ читает переписку и отвечает на вопросы. Приоритет — локальная модель (без ключа и лимитов, приватно), иначе Gemini по ключу ниже.")
+                if local.isDownloaded {
+                    Label("Локальная модель загружена", systemImage: "checkmark.seal.fill")
+                        .foregroundStyle(.green)
+                    Button(role: .destructive) { local.delete() } label: { Text("Удалить модель") }
+                } else if local.downloading {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ProgressView(value: local.progress)
+                        Text(local.status).font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button { local.startDownload() } label: {
+                        Label("Скачать локальную модель (~400 МБ)", systemImage: "arrow.down.circle.fill")
+                    }
+                }
+            } header: { Text("Локальная модель") }
+            footer: {
+                Text("Работает на любом телефоне без интернета и лимитов, данные не уходят. Модель Qwen2.5-0.5B. Маленькая и медленная — свод большого чата собирается долго.")
             }
+
+            if AIEngine.onDeviceReady {
+                Section { Label("Apple Intelligence на устройстве доступна", systemImage: "apple.logo") }
+                    footer: { Text("Если локальная модель не скачана — используется системная модель Apple.") }
+            }
+
             Section {
                 SecureField("Gemini API-ключ", text: $geminiKey)
                     .autocorrectionDisabled().textInputAutocapitalization(.never)
                     .onChange(of: geminiKey) { _ in Keychain.set(geminiKey, for: "gemini_key") }
             } header: { Text("Gemini (запасной вариант)") }
-            footer: { Text("Ключ с aistudio.google.com. Текст чата уходит в Google.") }
+            footer: { Text("Ключ с aistudio.google.com. Используется, только если нет локальной и системной модели. Текст чата уходит в Google.") }
         }
         .navigationTitle("Нейросеть").navigationBarTitleDisplayMode(.inline)
     }
