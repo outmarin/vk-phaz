@@ -235,7 +235,7 @@ struct AISettings: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(m.name).font(.body)
                     Text("~\(m.sizeMB) МБ · \(m.fitLabel)")
-                        .font(.caption).foregroundStyle(m.fits ? .secondary : .orange)
+                        .font(.caption).foregroundStyle(m.fits ? Color.secondary : Color.orange)
                 }
                 Spacer()
                 if local.isDownloaded(m.id) {
