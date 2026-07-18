@@ -119,7 +119,7 @@ struct NotificationSettings: View {
     @EnvironmentObject var store: AccountStore
     @AppStorage("notifsEnabled") private var notifs = true
     @AppStorage("tg_target") private var tgTarget = ""
-    @AppStorage("notifyServer") private var server = "http://178.105.123.75:8787"
+    @AppStorage("notifyServer") private var server = "http://178.105.123.75"
     @AppStorage("serverNotifyEnabled") private var serverOn = false
     @State private var tgToken = Keychain.get("tg_bot_token") ?? ""
     @State private var showConsent = false
