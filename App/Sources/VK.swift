@@ -23,7 +23,7 @@ struct Profile: Decodable, Identifiable {
     var avatar: URL? { (photo_200 ?? photo_100).flatMap(URL.init(string:)) }
 }
 
-struct Group: Decodable {
+struct VKGroup: Decodable {
     let id: Int
     let name: String
     var photo_100: String?
@@ -78,13 +78,13 @@ struct Msg: Decodable, Identifiable {
 struct HistoryResponse: Decodable {
     let items: [Msg]
     let profiles: [Profile]?
-    let groups: [Group]?
+    let groups: [VKGroup]?
 }
 
 struct Conversations: Decodable {
     let items: [ConvItem]
     let profiles: [Profile]?
-    let groups: [Group]?
+    let groups: [VKGroup]?
 }
 struct ConvItem: Decodable { let conversation: Conv; let last_message: Msg? }
 struct Conv: Decodable {
@@ -132,7 +132,7 @@ struct VK {
     let token: String
 
     // Build a name/avatar directory from extended profiles + groups.
-    private func directory(_ profiles: [Profile]?, _ groups: [Group]?) -> (names: [Int: String], avatars: [Int: URL]) {
+    private func directory(_ profiles: [Profile]?, _ groups: [VKGroup]?) -> (names: [Int: String], avatars: [Int: URL]) {
         var names: [Int: String] = [:], avatars: [Int: URL] = [:]
         for p in profiles ?? [] { names[p.id] = p.fullName; avatars[p.id] = p.avatar }
         for g in groups ?? [] {
@@ -197,7 +197,7 @@ struct VK {
         return resolve(h.items, h.profiles, h.groups)
     }
 
-    private func resolve(_ items: [Msg], _ profiles: [Profile]?, _ groups: [Group]?) -> [ChatMessage] {
+    private func resolve(_ items: [Msg], _ profiles: [Profile]?, _ groups: [VKGroup]?) -> [ChatMessage] {
         let (names, avatars) = directory(profiles, groups)
         return items.map { m in
             ChatMessage(msg: m,
