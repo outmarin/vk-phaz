@@ -66,6 +66,10 @@ struct ChatView: View {
     @State private var lastTyping = Date.distantPast
     @State private var outRead = 0
     @State private var wpRefresh = 0
+    @State private var secretOn = false
+    @State private var secretStatus = ""
+    @State private var showSafety = false
+    @State private var secretText: [Int: String] = [:]   // msg.id -> decrypted/annotated display
     @State private var showWallpaperPicker = false
     @State private var wallpaperItem: PhotosPickerItem?
 
@@ -113,12 +117,19 @@ struct ChatView: View {
                     }
                     if isUser && peerId != ownId {
                         Button { showProfile = true } label: { Label("Профиль", systemImage: "person.crop.circle") }
+                        Button { Task { await startSecret() } } label: {
+                            Label(secretOn ? "Секретный чат вкл." : "Секретный чат", systemImage: "lock.shield")
+                        }
+                        if SecretChat.established(ownId, peerId) {
+                            Button { showSafety = true } label: { Label("Отпечаток безопасности", systemImage: "checkmark.shield") }
+                        }
                     }
                 } label: {
                     VStack(spacing: 1) {
-                        Text(title).font(.headline).foregroundStyle(.primary)
-                        if !subtitle.isEmpty {
-                            Text(subtitle).font(.caption2)
+                        Text((secretOn ? "🔒 " : "") + title).font(.headline).foregroundStyle(.primary)
+                        let sub = secretOn && !secretStatus.isEmpty ? secretStatus : subtitle
+                        if !sub.isEmpty {
+                            Text(sub).font(.caption2)
                                 .foregroundStyle(live.isTyping(peerId) ? Color.accentColor : Color.secondary)
                         }
                     }
@@ -158,6 +169,9 @@ struct ChatView: View {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
         .sheet(isPresented: $showAI) { AISheet(vk: vk, peerId: peerId) }
+        .sheet(isPresented: $showSafety) {
+            SafetyNumberView(title: title, number: SecretChat.safetyNumber(own: ownId, peer: peerId) ?? "—")
+        }
         .fullScreenCover(item: $viewerURL) { PhotoViewer(url: $0.url) }
         .sheet(isPresented: $showAttach) {
             AttachSheet(
@@ -202,6 +216,7 @@ struct ChatView: View {
                         MessageRow(cm: pair.cm, mine: pair.cm.msg.from_id == ownId,
                                    isChat: isChat, readUpTo: outRead,
                                    highlighted: highlightId == pair.cm.id,
+                                   overrideText: secretText[pair.cm.id],
                                    onOpenImage: { viewerURL = IdURL(url: $0) })
                             .id(pair.cm.id)
                             .onLongPressGesture { selected = pair.cm }
@@ -406,8 +421,48 @@ struct ChatView: View {
         do {
             messages = try await vk.history(peerId: peerId)
             outRead = (try? await vk.outRead(peerId: peerId)) ?? outRead
+            processSecret()
             error = nil
         }
+        catch let e as VKError { error = e.error_msg }
+        catch { self.error = error.localizedDescription }
+    }
+
+    // Process handshake messages + decrypt secret messages for display.
+    private func processSecret() {
+        guard isUser, peerId != ownId else { return }
+        var map: [Int: String] = [:]
+        for cm in messages {
+            let t = cm.msg.text
+            if t.hasPrefix(SecretChat.initMarker) {
+                if cm.msg.from_id != ownId {
+                    switch SecretChat.processInit(own: ownId, peer: peerId, text: t) {
+                    case .established: secretStatus = "🔒 защищено"
+                    case .changedIdentity: secretStatus = "⚠️ ключ собеседника изменился!"
+                    case .invalid: break
+                    }
+                }
+                map[cm.msg.id] = "🔐 Обмен ключами защищённого чата"
+            } else if t.hasPrefix(SecretChat.msgMarker) {
+                if let pt = SecretChat.decrypt(own: ownId, peer: peerId, t) {
+                    map[cm.msg.id] = "🔒 " + pt
+                } else {
+                    map[cm.msg.id] = "🔒 зашифрованное сообщение"
+                }
+            }
+        }
+        secretText = map
+        if SecretChat.established(ownId, peerId) {
+            secretOn = true
+            if secretStatus.isEmpty { secretStatus = "🔒 защищено" }
+        }
+    }
+
+    private func startSecret() async {
+        secretOn = true
+        secretStatus = SecretChat.established(ownId, peerId) ? "🔒 защищено" : "ожидание собеседника…"
+        let initMsg = SecretChat.myInit(own: ownId, peer: peerId)
+        do { try await vk.send(peerId: peerId, text: initMsg); await load() }
         catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
     }
@@ -426,6 +481,14 @@ struct ChatView: View {
         replyingTo = nil
         let atts = pending.map { $0.attachment }.joined(separator: ",")
         pending = []
+        // Secret chat: encrypt text before it leaves the device (attachments stay plain — not covered).
+        if secretOn, atts.isEmpty, SecretChat.established(ownId, peerId),
+           let enc = SecretChat.encrypt(own: ownId, peer: peerId, text) {
+            do { try await vk.send(peerId: peerId, text: enc); await load() }
+            catch let e as VKError { error = e.error_msg }
+            catch { self.error = error.localizedDescription }
+            return
+        }
         do {
             try await vk.send(peerId: peerId, text: text, replyTo: reply,
                               attachment: atts.isEmpty ? nil : atts)
@@ -514,8 +577,10 @@ struct MessageRow: View {
     let isChat: Bool
     var readUpTo: Int = 0
     var highlighted: Bool = false
+    var overrideText: String? = nil
     var onOpenImage: (URL) -> Void = { _ in }
     private var msg: Msg { cm.msg }
+    private var shownText: String { overrideText ?? msg.text }
 
     private var bubbleShape: UnevenRoundedRectangle {
         UnevenRoundedRectangle(cornerRadii: .init(
@@ -581,7 +646,7 @@ struct MessageRow: View {
             if let v = msg.voice { voiceRow(v) }
             if let d = msg.doc { docRow(d) }
             HStack(alignment: .bottom, spacing: 6) {
-                if !msg.text.isEmpty { Text(msg.text) }
+                if !shownText.isEmpty { Text(shownText) }
                 Text(hhmm(msg.date))
                     .font(.caption2)
                     .foregroundStyle(mine ? Color.white.opacity(0.75) : Color.secondary)
@@ -629,6 +694,32 @@ struct MessageRow: View {
         if let u = d.url.flatMap({ URL(string: $0) }) {
             Link(destination: u) { row }.foregroundStyle(mine ? .white : .primary)
         } else { row }
+    }
+}
+
+struct SafetyNumberView: View {
+    let title: String
+    let number: String
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 20) {
+                Image(systemName: "checkmark.shield.fill").font(.system(size: 48)).foregroundStyle(.green)
+                Text("Отпечаток безопасности").font(.title3.bold())
+                Text("Сравни это число с \(title) по другому каналу (голосом, лично). Если совпадает — переписку никто не подменяет.")
+                    .font(.callout).foregroundStyle(.secondary).multilineTextAlignment(.center).padding(.horizontal)
+                Text(number)
+                    .font(.system(.title2, design: .monospaced).weight(.semibold))
+                    .textSelection(.enabled)
+                    .padding().frame(maxWidth: .infinity)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 14))
+                    .padding(.horizontal)
+                Spacer()
+            }
+            .padding(.top, 30)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
+        }
     }
 }
 
