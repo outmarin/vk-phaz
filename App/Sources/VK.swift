@@ -53,12 +53,14 @@ struct Msg: Decodable, Identifiable {
     struct Reply: Decodable { let from_id: Int; let text: String }
 
     var stickerURL: URL? {
-        (attachments ?? []).first(where: { $0.type == "sticker" })?.sticker?
-            .images.max(by: { $0.width < $1.width })?.url.flatMap { URL(string: $0) }
+        guard let img = (attachments ?? []).first(where: { $0.type == "sticker" })?
+            .sticker?.images.max(by: { $0.width < $1.width }) else { return nil }
+        return URL(string: img.url)
     }
     var photoURL: URL? {
-        (attachments ?? []).first(where: { $0.type == "photo" })?.photo?
-            .sizes.max(by: { $0.width < $1.width })?.url.flatMap { URL(string: $0) }
+        guard let img = (attachments ?? []).first(where: { $0.type == "photo" })?
+            .photo?.sizes.max(by: { $0.width < $1.width }) else { return nil }
+        return URL(string: img.url)
     }
     var doc: Attachment.Doc? { (attachments ?? []).first(where: { $0.type == "doc" })?.doc }
 

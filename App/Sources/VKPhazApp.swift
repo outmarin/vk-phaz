@@ -7,13 +7,18 @@ struct VKPhazApp: App {
     @AppStorage("accentHex") private var accentHex = "#3A8DFF"
     @AppStorage("appearance") private var appearance = 0
 
+    private var accent: Color { Color(hex: accentHex) ?? .blue }
+    private var scheme: ColorScheme? {
+        switch appearance { case 1: return .light; case 2: return .dark; default: return nil }
+    }
+
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environmentObject(store)
                 .environmentObject(live)
-                .tint(Color(hex: accentHex) ?? .blue)
-                .preferredColorScheme(appearance == 1 ? .light : appearance == 2 ? .dark : nil)
+                .tint(accent)
+                .preferredColorScheme(scheme)
         }
     }
 }
