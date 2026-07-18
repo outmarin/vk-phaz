@@ -47,10 +47,13 @@ struct Msg: Decodable, Identifiable {
     let from_id: Int
     let text: String
     let date: Int
+    var conversation_message_id: Int?
     var attachments: [Attachment]?
     var reply_message: Reply?
     var fwd_messages: [Reply]?
+    var reactions: [Reaction]?
     struct Reply: Decodable { let from_id: Int; let text: String }
+    struct Reaction: Decodable { let reaction_id: Int; let count: Int }
 
     var stickerURL: URL? {
         guard let img = (attachments ?? []).first(where: { $0.type == "sticker" })?
@@ -100,6 +103,20 @@ struct Peer: Decodable { let id: Int; let type: String }
 
 struct FriendsResponse: Decodable { let count: Int; let items: [Profile] }
 struct LongPollServer: Decodable { let server: String; let key: String; let ts: Int }
+
+struct StickerItem: Decodable, Identifiable {
+    let sticker_id: Int
+    let images: [AttachmentImage]?
+    var id: Int { sticker_id }
+    var url: URL? {
+        guard let img = (images ?? []).max(by: { $0.width < $1.width }) else { return nil }
+        return URL(string: img.url)
+    }
+}
+struct StoreProducts: Decodable {
+    let items: [Product]
+    struct Product: Decodable { let stickers: [StickerItem]? }
+}
 
 // A resolved chat-list row.
 struct ChatRow: Identifiable, Hashable {
@@ -191,9 +208,15 @@ struct VK {
         return resolve(h.items.reversed(), h.profiles, h.groups)
     }
 
-    func search(peerId: Int, query: String) async throws -> [ChatMessage] {
-        let h: HistoryResponse = try await call("messages.search",
-            ["peer_id": String(peerId), "q": query, "count": "100", "extended": "1", "fields": "photo_100"])
+    func search(peerId: Int, query: String, before: Date? = nil) async throws -> [ChatMessage] {
+        var p = ["peer_id": String(peerId), "q": query, "count": "100",
+                 "extended": "1", "fields": "photo_100"]
+        if let before {
+            let f = DateFormatter()
+            f.dateFormat = "ddMMyyyy"
+            p["date"] = f.string(from: before)   // VK: только сообщения до этой даты
+        }
+        let h: HistoryResponse = try await call("messages.search", p)
         return resolve(h.items, h.profiles, h.groups)
     }
 
@@ -213,6 +236,23 @@ struct VK {
         if let replyTo { p["reply_to"] = String(replyTo) }
         if let attachment { p["attachment"] = attachment }
         let _: Int = try await call("messages.send", p)
+    }
+
+    func sendSticker(peerId: Int, stickerId: Int) async throws {
+        let _: Int = try await call("messages.send",
+            ["peer_id": String(peerId), "sticker_id": String(stickerId),
+             "random_id": String(Int32.random(in: 1...Int32.max))])
+    }
+
+    func sendReaction(peerId: Int, cmid: Int, reactionId: Int) async throws {
+        let _: Int = try await call("messages.sendReaction",
+            ["peer_id": String(peerId), "cmid": String(cmid), "reaction_id": String(reactionId)])
+    }
+
+    func stickers() async throws -> [StickerItem] {
+        let r: StoreProducts = try await call("store.getProducts",
+            ["type": "stickers", "filters": "purchased", "extended": "1"])
+        return r.items.flatMap { $0.stickers ?? [] }
     }
 
     func setActivity(peerId: Int) async {

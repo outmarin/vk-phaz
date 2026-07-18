@@ -8,6 +8,22 @@ private func hhmm(_ ts: Int) -> String {
     return f.string(from: Date(timeIntervalSince1970: TimeInterval(ts)))
 }
 
+private func dayLabel(_ ts: Int) -> String {
+    let d = Date(timeIntervalSince1970: TimeInterval(ts))
+    if Calendar.current.isDateInToday(d) { return "Сегодня" }
+    if Calendar.current.isDateInYesterday(d) { return "Вчера" }
+    let f = DateFormatter()
+    f.locale = Locale(identifier: "ru_RU")
+    f.dateFormat = "d MMMM"
+    return f.string(from: d)
+}
+
+// ponytail: fixed id->emoji table; VK serves reaction art via assets we don't fetch.
+let reactionSet: [(id: Int, emoji: String)] = [
+    (1, "❤️"), (2, "🔥"), (3, "😆"), (4, "👍"), (5, "👎"), (6, "😢"), (7, "😡"), (8, "👌"),
+]
+func reactionEmoji(_ id: Int) -> String { reactionSet.first { $0.id == id }?.emoji ?? "👍" }
+
 struct ChatView: View {
     let vk: VK
     let peerId: Int
@@ -19,9 +35,11 @@ struct ChatView: View {
     @State private var draft = ""
     @State private var replyingTo: ChatMessage?
     @State private var error: String?
+    @State private var peerProfile: Profile?
     @State private var showProfile = false
     @State private var showSearch = false
     @State private var showAttach = false
+    @State private var showStickers = false
     @State private var showPhotoPicker = false
     @State private var photoItem: PhotosPickerItem?
     @State private var showFileImporter = false
@@ -31,52 +49,52 @@ struct ChatView: View {
     private var isChat: Bool { peerId >= 2_000_000_000 }
     private var isUser: Bool { peerId > 0 && peerId < 2_000_000_000 }
 
-    var body: some View {
-        VStack(spacing: 0) {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(spacing: 8) {
-                        ForEach(messages) { cm in
-                            MessageRow(cm: cm, mine: cm.msg.from_id == ownId, isChat: isChat)
-                                .id(cm.id)
-                                .contextMenu {
-                                    Button { replyingTo = cm } label: {
-                                        Label("Ответить", systemImage: "arrowshape.turn.up.left")
-                                    }
-                                    if !cm.msg.text.isEmpty {
-                                        Button { UIPasteboard.general.string = cm.msg.text } label: {
-                                            Label("Копировать", systemImage: "doc.on.doc")
-                                        }
-                                    }
-                                }
-                        }
-                        if live.isTyping(peerId) {
-                            HStack { TypingDots(); Spacer() }.padding(.horizontal, 10)
-                        }
-                    }
-                    .padding(.vertical, 8)
-                }
-                .onChange(of: messages.count) { _ in
-                    if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
-                }
-            }
+    private var subtitle: String {
+        if live.isTyping(peerId) { return "печатает…" }
+        if peerId == ownId { return "заметки для себя" }
+        guard let p = peerProfile else { return "" }
+        return lastSeenText(online: p.online == 1, ts: p.last_seen?.time)
+    }
 
-            if let reply = replyingTo { replyBanner(reply) }
-            if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
-            inputBar
+    // Day separators between messages of different days.
+    private var timeline: [(cm: ChatMessage, day: String?)] {
+        var out: [(ChatMessage, String?)] = []
+        var last = ""
+        for cm in messages {
+            let d = dayLabel(cm.msg.date)
+            out.append((cm, d == last ? nil : d))
+            last = d
+        }
+        return out
+    }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color.accentColor.opacity(0.16),
+                                    Color.purple.opacity(0.10),
+                                    Color.accentColor.opacity(0.05)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+            VStack(spacing: 0) {
+                messageList
+                if let reply = replyingTo { replyBanner(reply) }
+                if let error { Text(error).font(.caption).foregroundStyle(.red).padding(.horizontal) }
+                inputBar
+            }
         }
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Button { if isUser { showProfile = true } } label: {
+                Button { if isUser && peerId != ownId { showProfile = true } } label: {
                     VStack(spacing: 1) {
                         Text(title).font(.headline).foregroundStyle(.primary)
-                        if live.isTyping(peerId) {
-                            Text("печатает…").font(.caption2).foregroundStyle(Color.accentColor)
+                        if !subtitle.isEmpty {
+                            Text(subtitle).font(.caption2)
+                                .foregroundStyle(live.isTyping(peerId) ? Color.accentColor : Color.secondary)
                         }
                     }
                 }
-                .disabled(!isUser)
+                .buttonStyle(.plain)
             }
             ToolbarItem(placement: .topBarTrailing) {
                 Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
@@ -84,12 +102,25 @@ struct ChatView: View {
         }
         .onAppear { live.setActive(peer: peerId) }
         .onDisappear { live.setActive(peer: nil) }
-        .task { await load() }
+        .task {
+            await load()
+            if isUser && peerId != ownId { peerProfile = try? await vk.user(id: peerId) }
+        }
         .onChange(of: live.bump) { _ in Task { await load() } }
         .sheet(isPresented: $showProfile) {
             NavigationStack { ProfileView(vk: vk, userId: peerId, ownId: ownId) }
         }
         .sheet(isPresented: $showSearch) { MessageSearchSheet(vk: vk, peerId: peerId) }
+        .sheet(isPresented: $showAttach) {
+            AttachSheet(
+                onPhoto: { showAttach = false; showPhotoPicker = true },
+                onFile: { showAttach = false; showFileImporter = true })
+                .presentationDetents([.height(210)])
+        }
+        .sheet(isPresented: $showStickers) {
+            StickerSheet(vk: vk) { sid in Task { await sendSticker(sid) } }
+                .presentationDetents([.medium, .large])
+        }
         .photosPicker(isPresented: $showPhotoPicker, selection: $photoItem, matching: .images)
         .onChange(of: photoItem) { item in
             guard let item else { return }
@@ -103,27 +134,80 @@ struct ChatView: View {
         }
     }
 
+    private var messageList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(spacing: 3) {
+                    ForEach(timeline, id: \.cm.id) { pair in
+                        if let day = pair.day { dayChip(day) }
+                        MessageRow(cm: pair.cm, mine: pair.cm.msg.from_id == ownId, isChat: isChat)
+                            .id(pair.cm.id)
+                            .contextMenu { menu(pair.cm) }
+                    }
+                    if live.isTyping(peerId) {
+                        HStack { TypingDots(); Spacer() }.padding(.horizontal, 12)
+                    }
+                }
+                .padding(.vertical, 8)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: messages.count) { _ in
+                if let last = messages.last { withAnimation { proxy.scrollTo(last.id, anchor: .bottom) } }
+            }
+        }
+    }
+
+    private func dayChip(_ day: String) -> some View {
+        Text(day)
+            .font(.caption.weight(.medium))
+            .padding(.horizontal, 10).padding(.vertical, 4)
+            .background(.ultraThinMaterial, in: Capsule())
+            .padding(.vertical, 6)
+    }
+
+    @ViewBuilder private func menu(_ cm: ChatMessage) -> some View {
+        Section {
+            ForEach(reactionSet, id: \.id) { r in
+                Button(r.emoji) { Task { await react(cm, r.id) } }
+            }
+        }
+        Button { replyingTo = cm } label: { Label("Ответить", systemImage: "arrowshape.turn.up.left") }
+        if !cm.msg.text.isEmpty {
+            Button { UIPasteboard.general.string = cm.msg.text } label: {
+                Label("Копировать", systemImage: "doc.on.doc")
+            }
+        }
+    }
+
     private var inputBar: some View {
         HStack(spacing: 8) {
-            Button { showAttach = true } label: { Image(systemName: "paperclip").font(.title3) }
-                .confirmationDialog("Вложение", isPresented: $showAttach, titleVisibility: .visible) {
-                    Button("Фото") { showPhotoPicker = true }
-                    Button("Файл") { showFileImporter = true }
-                    Button("Отмена", role: .cancel) {}
+            Button { showAttach = true } label: {
+                Image(systemName: "paperclip").font(.title3).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                TextField("Сообщение", text: $draft, axis: .vertical)
+                    .onChange(of: draft) { _ in sendTyping() }
+                Button { showStickers = true } label: {
+                    Image(systemName: "face.smiling").font(.title3).foregroundStyle(.secondary)
                 }
-            TextField("Сообщение", text: $draft, axis: .vertical)
-                .textFieldStyle(.roundedBorder)
-                .onChange(of: draft) { _ in sendTyping() }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
             if uploading {
-                ProgressView().frame(width: 32)
+                ProgressView().frame(width: 34)
             } else {
                 Button { Task { await send() } } label: {
-                    Image(systemName: "arrow.up.circle.fill").font(.title)
+                    Image(systemName: "arrow.up")
+                        .font(.body.weight(.bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(Color.accentColor, in: Circle())
                 }
                 .disabled(draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
         }
-        .padding(8)
+        .padding(.horizontal, 10).padding(.vertical, 8)
+        .background(.ultraThinMaterial)
     }
 
     private func replyBanner(_ reply: ChatMessage) -> some View {
@@ -134,10 +218,14 @@ struct ChatView: View {
                 Text(reply.msg.preview).font(.caption).foregroundStyle(.secondary).lineLimit(1)
             }
             Spacer()
-            Button { replyingTo = nil } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+            Button { replyingTo = nil } label: {
+                Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+            }
         }
-        .padding(8).background(.thinMaterial)
+        .padding(8).background(.ultraThinMaterial)
     }
+
+    // MARK: actions
 
     private func load() async {
         do { messages = try await vk.history(peerId: peerId); error = nil }
@@ -158,6 +246,20 @@ struct ChatView: View {
         let reply = replyingTo?.msg.id
         replyingTo = nil
         do { try await vk.send(peerId: peerId, text: text, replyTo: reply); await load() }
+        catch let e as VKError { error = e.error_msg }
+        catch { self.error = error.localizedDescription }
+    }
+
+    private func react(_ cm: ChatMessage, _ reactionId: Int) async {
+        guard let cmid = cm.msg.conversation_message_id else { return }
+        do { try await vk.sendReaction(peerId: peerId, cmid: cmid, reactionId: reactionId); await load() }
+        catch let e as VKError { error = e.error_msg }
+        catch {}
+    }
+
+    private func sendSticker(_ stickerId: Int) async {
+        showStickers = false
+        do { try await vk.sendSticker(peerId: peerId, stickerId: stickerId); await load() }
         catch let e as VKError { error = e.error_msg }
         catch { self.error = error.localizedDescription }
     }
@@ -188,41 +290,55 @@ struct ChatView: View {
     }
 }
 
+// MARK: - Message row (TG-style bubble)
+
 struct MessageRow: View {
     let cm: ChatMessage
     let mine: Bool
     let isChat: Bool
     private var msg: Msg { cm.msg }
 
+    private var bubbleShape: UnevenRoundedRectangle {
+        UnevenRoundedRectangle(cornerRadii: .init(
+            topLeading: 18,
+            bottomLeading: mine ? 18 : 5,
+            bottomTrailing: mine ? 5 : 18,
+            topTrailing: 18))
+    }
+
     var body: some View {
         HStack(alignment: .bottom, spacing: 6) {
             if mine {
-                Spacer(minLength: 40)
+                Spacer(minLength: 48)
             } else if isChat {
-                AvatarView(url: cm.senderAvatar, name: cm.senderName, id: msg.from_id, size: 30)
+                AvatarView(url: cm.senderAvatar, name: cm.senderName, id: msg.from_id, size: 28)
             }
             VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
-                if isChat && !mine {
-                    Text(cm.senderName).font(.caption).foregroundStyle(avatarTint(for: msg.from_id))
-                }
                 content
+                if let rs = msg.reactions, !rs.isEmpty { reactionsRow(rs) }
             }
-            if !mine { Spacer(minLength: 40) }
+            if !mine { Spacer(minLength: 48) }
         }
         .padding(.horizontal, 10)
     }
 
     @ViewBuilder private var content: some View {
         if let sticker = msg.stickerURL {
-            AsyncImage(url: sticker) { $0.resizable().scaledToFit() } placeholder: { ProgressView() }
-                .frame(width: 128, height: 128)
+            VStack(alignment: mine ? .trailing : .leading, spacing: 2) {
+                CachedImage(url: sticker, fill: false, placeholder: .clear)
+                    .frame(width: 140, height: 140)
+                Text(hhmm(msg.date)).font(.caption2).foregroundStyle(.secondary)
+            }
         } else {
             bubble
         }
     }
 
     private var bubble: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 5) {
+            if isChat && !mine {
+                Text(cm.senderName).font(.caption.bold()).foregroundStyle(avatarTint(for: msg.from_id))
+            }
             if let r = msg.reply_message {
                 HStack(spacing: 6) {
                     Rectangle().fill(mine ? Color.white : Color.accentColor).frame(width: 3)
@@ -231,31 +347,42 @@ struct MessageRow: View {
                         Text(r.text.isEmpty ? "Вложение" : r.text).font(.caption).lineLimit(1)
                     }
                 }
-                .opacity(0.9)
+                .opacity(0.85)
+                .frame(maxHeight: 34)
             }
             if let photo = msg.photoURL {
-                AsyncImage(url: photo) { $0.resizable().scaledToFit() } placeholder: {
-                    Color.gray.opacity(0.2).frame(height: 160)
-                }
-                .frame(maxWidth: 240)
-                .clipShape(RoundedRectangle(cornerRadius: 12))
+                CachedImage(url: photo)
+                    .frame(width: 220, height: 240)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
-            if let d = msg.doc {
-                docRow(d)
+            if let d = msg.doc { docRow(d) }
+            HStack(alignment: .bottom, spacing: 6) {
+                if !msg.text.isEmpty { Text(msg.text) }
+                Text(hhmm(msg.date))
+                    .font(.caption2)
+                    .foregroundStyle(mine ? Color.white.opacity(0.75) : Color.secondary)
             }
-            if !msg.text.isEmpty {
-                Text(msg.text)
-            }
-            Text(hhmm(msg.date))
-                .font(.caption2)
-                .foregroundStyle(mine ? Color.white.opacity(0.7) : .secondary)
-                .frame(maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .frame(minWidth: 60, alignment: .leading)
-        .background(mine ? Color.accentColor : Color.gray.opacity(0.18))
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background {
+            if mine {
+                bubbleShape.fill(Color.accentColor.gradient)
+            } else {
+                bubbleShape.fill(.ultraThinMaterial)
+            }
+        }
         .foregroundStyle(mine ? .white : .primary)
-        .clipShape(RoundedRectangle(cornerRadius: 18))
+    }
+
+    private func reactionsRow(_ rs: [Msg.Reaction]) -> some View {
+        HStack(spacing: 4) {
+            ForEach(rs, id: \.reaction_id) { r in
+                Text("\(reactionEmoji(r.reaction_id)) \(r.count)")
+                    .font(.caption2)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .background(.ultraThinMaterial, in: Capsule())
+            }
+        }
     }
 
     @ViewBuilder private func docRow(_ d: Attachment.Doc) -> some View {
@@ -266,7 +393,7 @@ struct MessageRow: View {
                 Text((d.ext ?? "").uppercased()).font(.caption2).opacity(0.7)
             }
         }
-        if let u = d.url.flatMap(URL.init(string:)) {
+        if let u = d.url.flatMap({ URL(string: $0) }) {
             Link(destination: u) { row }.foregroundStyle(mine ? .white : .primary)
         } else {
             row
@@ -286,31 +413,121 @@ struct TypingDots: View {
         }
         .foregroundStyle(.secondary)
         .padding(10)
-        .background(Color.gray.opacity(0.18), in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
         .onAppear { on = true }
     }
 }
+
+// MARK: - Attach sheet (glass tiles)
+
+struct AttachSheet: View {
+    let onPhoto: () -> Void
+    let onFile: () -> Void
+
+    var body: some View {
+        VStack(spacing: 14) {
+            Capsule().fill(.secondary.opacity(0.4)).frame(width: 36, height: 4).padding(.top, 8)
+            HStack(spacing: 16) {
+                tile("photo.on.rectangle.angled", "Галерея", action: onPhoto)
+                tile("doc.fill", "Файл", action: onFile)
+            }
+            .padding(.horizontal, 20)
+            Spacer()
+        }
+        .presentationDragIndicator(.hidden)
+    }
+
+    private func tile(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.accentColor)
+                Text(label).font(.subheadline).foregroundStyle(.primary)
+            }
+            .frame(maxWidth: .infinity)
+            .frame(height: 110)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+}
+
+// MARK: - Sticker picker
+
+struct StickerSheet: View {
+    let vk: VK
+    let onPick: (Int) -> Void
+    @State private var items: [StickerItem] = []
+    @State private var status = "Загрузка…"
+
+    var body: some View {
+        ScrollView {
+            if items.isEmpty {
+                Text(status).foregroundStyle(.secondary).padding(.top, 60)
+            } else {
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 10) {
+                    ForEach(items) { s in
+                        Button { onPick(s.sticker_id) } label: {
+                            CachedImage(url: s.url, fill: false, placeholder: .clear)
+                                .frame(height: 80)
+                        }
+                    }
+                }
+                .padding()
+            }
+        }
+        .task {
+            do {
+                items = try await vk.stickers()
+                if items.isEmpty { status = "Нет доступных стикеров" }
+            } catch let e as VKError { status = e.error_msg }
+            catch { status = "Не удалось загрузить" }
+        }
+    }
+}
+
+// MARK: - In-chat search (word + date)
 
 struct MessageSearchSheet: View {
     let vk: VK
     let peerId: Int
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
+    @State private var useDate = false
+    @State private var date = Date()
     @State private var results: [ChatMessage] = []
     @State private var loading = false
 
     var body: some View {
         NavigationStack {
-            List(results) { cm in
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(cm.msg.text.isEmpty ? cm.msg.preview : cm.msg.text).lineLimit(2)
-                    Text(cm.senderName + " · " + fullDate(cm.msg.date))
-                        .font(.caption).foregroundStyle(.secondary)
+            VStack(spacing: 0) {
+                VStack(spacing: 8) {
+                    Toggle("Искать до даты", isOn: $useDate)
+                    if useDate {
+                        DatePicker("Дата", selection: $date, displayedComponents: .date)
+                            .datePickerStyle(.compact)
+                    }
+                }
+                .padding(.horizontal)
+                List(results) { cm in
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(cm.msg.text.isEmpty ? cm.msg.preview : cm.msg.text).lineLimit(2)
+                        Text(cm.senderName + " · " + fullDate(cm.msg.date))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                .listStyle(.plain)
+                .overlay {
+                    if loading { ProgressView() }
+                    else if results.isEmpty {
+                        Text("Введи слово и нажми Найти").foregroundStyle(.secondary)
+                    }
                 }
             }
-            .overlay { if loading { ProgressView() } else if results.isEmpty { Text("Введите слово для поиска").foregroundStyle(.secondary) } }
             .searchable(text: $query, prompt: "Слово или фраза")
             .onSubmit(of: .search) { Task { await run() } }
+            .onChange(of: useDate) { _ in Task { await run() } }
+            .onChange(of: date) { _ in Task { await run() } }
             .navigationTitle("Поиск в чате")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Готово") { dismiss() } } }
@@ -318,8 +535,9 @@ struct MessageSearchSheet: View {
     }
 
     private func run() async {
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return }
         loading = true
-        results = (try? await vk.search(peerId: peerId, query: query)) ?? []
+        results = (try? await vk.search(peerId: peerId, query: query, before: useDate ? date : nil)) ?? []
         loading = false
     }
 }

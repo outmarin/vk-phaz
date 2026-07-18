@@ -51,7 +51,7 @@ struct GlassTabBar: View {
             item(1, "gearshape.fill", "Настройки")
         }
         .padding(6)
-        .background(.regularMaterial, in: Capsule())
+        .background(.ultraThinMaterial, in: Capsule())
         .overlay(Capsule().stroke(.primary.opacity(0.08)))
         .shadow(color: .black.opacity(0.12), radius: 12, y: 4)
         .padding(.bottom, 4)

@@ -9,11 +9,12 @@ struct AvatarView: View {
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
-            AsyncImage(url: url) { $0.resizable().scaledToFill() } placeholder: {
+            ZStack {
                 Circle().fill(avatarTint(for: id).gradient)
                     .overlay(Text(initials(name))
                         .font(.system(size: size * 0.38, weight: .semibold))
                         .foregroundStyle(.white))
+                if url != nil { CachedImage(url: url, placeholder: .clear) }
             }
             .frame(width: size, height: size).clipShape(Circle())
             if online {
@@ -70,6 +71,12 @@ struct ChatListView: View {
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showOwnProfile = true } label: {
                         Image(systemName: "person.crop.circle")
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink(value: ChatRow(peerId: ownId, title: "Избранное",
+                                                  subtitle: "", date: 0, avatar: nil, online: false)) {
+                        Image(systemName: "bookmark.circle")
                     }
                 }
             }
