@@ -32,6 +32,6 @@ targets:
         NSAppTransportSecurity:
           NSAllowsArbitraryLoads: false
           NSExceptionDomains:
-            "178.105.123.75":
+            "5.129.223.183":
               NSExceptionAllowsInsecureHTTPLoads: true
               NSIncludesSubdomains: false

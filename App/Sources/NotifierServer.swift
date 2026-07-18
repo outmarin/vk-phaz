@@ -4,7 +4,7 @@ import Foundation
 // the server holds the VK long-poll while the app is closed. Tokens are encrypted at rest server-side.
 enum NotifierServer {
     static var base: String {
-        (UserDefaults.standard.string(forKey: "notifyServer") ?? "http://178.105.123.75")
+        (UserDefaults.standard.string(forKey: "notifyServer") ?? "http://5.129.223.183:8787")
             .trimmingCharacters(in: .whitespaces)
     }
 
