@@ -699,12 +699,12 @@ struct SecretSetupView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section("Ваш ID") {
+                Section {
                     Text(SecretChat.myId).font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
                     Button { UIPasteboard.general.string = SecretChat.myId } label: {
                         Label("Скопировать", systemImage: "doc.on.doc")
                     }
-                } footer: {
+                } header: { Text("Ваш ID") } footer: {
                     Text("Передай этот ID собеседнику ВНЕ VK (лично, другим мессенджером). Тогда VK не сможет подменить ключи.")
                 }
 
@@ -722,9 +722,9 @@ struct SecretSetupView: View {
                 }
 
                 if SecretChat.established(peer), let sn = SecretChat.safetyNumber(peer) {
-                    Section("Отпечаток безопасности") {
+                    Section {
                         Text(sn).font(.system(.body, design: .monospaced)).textSelection(.enabled)
-                    } footer: {
+                    } header: { Text("Отпечаток безопасности") } footer: {
                         Text("Сравни это число с \(title) вне VK. Совпало — подмены нет.")
                     }
                 }
